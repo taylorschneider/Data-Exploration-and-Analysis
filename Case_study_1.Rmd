@@ -1,0 +1,2836 @@
+
+---
+title: "Data Exploration of R and Python"
+author: "https://www.kaggle.com/nomilk/deep-exploration-of-data-science-job-listings/code"
+date: ''
+output:
+  html_document:
+    code_folding: hide
+  pdf_document: default
+  word_document: default
+self_contained: yes
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+<br>
+
+
+```{r echo=FALSE}
+language_banner_url <- "http://www.datasciencemeta.com/language_banner_294_21.png"
+```
+<center><img src="`r language_banner_url`" height=100% width=100%></center>
+  
+  
+<br><br>
+
+* [Introduction](#introduction)
+* [Libraries](#libraries)
+* [Data Collection](#collection)
+* [Data Overview](#overview)
+* [Preprocessing](#preprocessing)
+* [Programming Languages & Software](#languages)
+* [Text Analysis Job Descriptions](#text)
+* [Who’s Hiring?](#who)
+* [When are Job Listings are Posted?](#when)
+* [Where in Australian are data science jobs based?](#where)
+* [Salaries](#salaries)
+* [Recruiter vs Employer](#recruiters)
+* [Job Titles](#jobs)
+* [Correlation Matrix](#correlations)
+* [Head to Head: R Vs Python](#rvpy)
+* [Do Standout Ads Work?](#standout)
+* [For Fun](#fun)
+  
+  
+
+  
+  
+  
+  
+  
+<br><br>
+
+
+# Introduction {#introduction}
+
+```{r error=FALSE, warning=FALSE, message=FALSE, echo=TRUE}
+
+
+ invisible({capture.output({
+
+
+library(data.table) # Important note: Must be loaded before lubridate or wday() collides
+library(wordcloud2)
+# dplyr 0.8.99.9002 (development version, installed from github) is required for
+# the initial data ingest in this EDA, as it contains dplyr::across() 
+# For the rest of this EDA, dplyr_0.8.5 (current CRAN version) is sufficient 
+library(dplyr)  
+library(lubridate)
+library(RCurl) # Must be before tidyr, or complete() collides 
+library(tidyr)
+library(stringr)
+library(jsonlite)
+library(scales)
+library(gridtext)
+library(ggtext) # To easily colour plot titles # remotes::install_github("wilkelab/ggtext")
+library(RColorBrewer)
+library(gridExtra) 
+library(tidytext)
+library(kableExtra)
+library(ggforce)
+library(VennDiagram)
+library(png) # Used to enhance VennDiagram styling 
+library(robotstxt)
+library(patchwork)
+library(viridis)
+library(gganimate)
+library(plotly)
+library(priceR)
+library(png)
+library(httr) 
+library(rnaturalearth)
+library(rnaturalearthhires)
+library(purrr)
+library(heatmaply)
+library(corrplot)
+library(leaflet)
+library(maps)
+library(ggridges)
+library(urltools)
+library(tufte)
+library(rvest)
+# library(gifski) # Doesn't install on kaggle
+# library(magick) # For image retrieval and conversion - not required for EDA
+})})
+   
+```
+
+
+
+# Libraries {#libraries .pad}
+
+Notes:
+
+- [`ggtext`](https://github.com/wilkelab/ggtext#ggtext-improved-text-rendering-support-for-ggplot2) is not yet on CRAN, so is therefore installed directly from github
+- [`rnaturalearthhires`](https://github.com/ropensci/rnaturalearthhires) is a data-only package containing the [Natural Earth map datasets](https://www.naturalearthdata.com/downloads/10m-cultural-vectors/), and is consequently too large for CRAN, and so it should also be installed directly from github. 
+
+All the other libraries can be installed directly from CRAN and loaded the usual way:
+
+```
+library(data.table) 
+library(wordcloud2)
+library(dplyr)  
+library(lubridate)
+library(RCurl) 
+library(tidyr)
+library(stringr)
+library(jsonlite)
+library(scales)
+library(gridtext)
+library(ggtext) 
+library(RColorBrewer)
+library(gridExtra) 
+library(tidytext)
+library(kableExtra)
+library(ggforce)
+library(VennDiagram)
+library(png) 
+library(robotstxt)
+library(patchwork)
+library(viridis)
+library(gganimate)
+library(plotly)
+library(priceR)
+library(png)
+library(httr) 
+library(rnaturalearth)
+library(rnaturalearthhires)
+library(purrr)
+library(heatmaply)
+library(corrplot)
+library(leaflet)
+library(maps)
+library(urltools)
+library(tufte)
+library(ggridges)
+library(rvest)
+```
+
+
+# Data Collection {#collection .pad}
+
+The data used is from the Australian job listing website, [seek.com.au](https://www.seek.com.au/). 
+
+R's `robotstxt` library allows us to check whether a domain allows friendly bots
+
+```
+paths_allowed(
+  paths  = "/job", 
+  domain = "seek.com.au", 
+  bot    = "*")
+[1] TRUE
+```
+```{r eval = FALSE}
+
+# Example url:
+# "https://www.seek.com.au/job/38098375?type=standout"
+
+paths_allowed(
+  paths  = "/job", 
+  domain = "seek.com.au", 
+  bot    = "*"
+)
+
+```
+
+`paths_allowed()` returns `TRUE` telling us that the `robots.txt` file doesn't contain any rule to disallow bots on the paths we wish to visit `r knitr::asis_output("\U1F605")` (see [here](https://cran.r-project.org/web/packages/robotstxt/vignettes/using_robotstxt.html) for more on `robots.txt` files and the `robotstxt` library; and [here](https://www.r-bloggers.com/scraping-responsibly-with-r/) and [here](https://github.com/dmi3kno/polite#polite-) for more on web scraping responsibly and politely respectively). 
+
+The data collection script would search for the terms `"Data Scientist" + <language>`, for each of 25 languages, and retrieve the job information for each listing it found. Once collected, the resulting data needed to be stored, and the script needed to be automated to run reliabily on a regular basis. 
+<br>
+```{r echo=FALSE}
+search_url <- "http://www.datasciencemeta.com/search.png"
+```
+<center><img src="`r search_url`" height=100% width=100%></center>
+<br>
+I happen to know the ruby on rails framework and heroku app deployment platform, so I moved the R script inside a [rails app](https://www.standardco.de/using-r-in-rails) and deployed it on Heroku, set to run hourly (using [polite principles](https://github.com/dmi3kno/polite#polite-)) and to store the results in a postgres database. This sounds complicated but took ~30 minutes from start to finish (I'd highly recommend Jordan Leigh's [Ultimate Introduction to Web Scraping](https://www.youtube.com/watch?v=1UYBAn69Qrk) to learn more).
+
+Fast forward ~1 year: since the data was being collected every hour, there are a LOT of duplicate job listings (since job ads would typically remain on the site for weeks)! Let's trim this data right down and look at only unique job listings. After the enormous ~14 gig file is read in, it can be wrangled into a *much* more compact ~1500 x ~50 dataframe!
+
+Now the data is collected and wrangled into a dataframe, it's time to explore it...
+
+```{r}
+
+# Originally using fread() until issue with vctrs: https://github.com/r-lib/vctrs/issues/999
+# listings <- fread("listings_raw.csv") # ~14 gb in size
+
+# So switched to using read.csv()
+# listings <- read.csv("listings_raw.csv", stringsAsFactors = FALSE) %>%
+#   mutate(n = 1) %>%
+#   tidyr::pivot_wider(names_from = language, values_from = n, values_fill = list(n=0)) %>%
+#   add_column(Lisp=0, .after = "Haskell") %>% # No job listings for Lisp, so add manually
+#   arrange(id) %>% select( -id,
+#                           # -created_at, # This should be kept commented out as it's required for first_seen etc
+#                           -updated_at,
+#                           -salary,
+#                           -highestSalaryParameter, # useless column
+#                           -earnings_increment,
+#                           -scrape_num) %>%
+#   group_by(jobId) %>%
+#   summarise( # `dplyr::across` Requires dplyr development version (only on github for now) (will be released as 1.0.0)
+#     across(c(jobTitle:companyRating), max),
+# 
+#     # Times are in UTC, which is sensible, but we'll make things easier for oursleves by converting now
+#     listingDate = min(listingDate %>% ymd_hms %>% with_tz(tzone = "Australia/Sydney")),
+#     expiryDate = max(expiryDate %>% ymd_hms %>% with_tz(tzone = "Australia/Sydney")),
+#     across(c(teaser:seekJobListingUrl), max),
+#     across(c(R:Fortran), ~ ifelse(sum(.x) >= 1, 1, 0)),
+#     first_seen = as.Date(min(created_at)),
+#     last_seen = as.Date(max(created_at))
+#      ) %>% as.data.frame
+
+
+  listings <- read.csv("listings.csv", stringsAsFactors = FALSE)
+
+
+  listings$listingDate <- listings$listingDate %>% as.POSIXct(format="%Y-%m-%d %H:%M:%OS")
+  listings$expiryDate <- listings$expiryDate %>% as.POSIXct(format="%Y-%m-%d %H:%M:%OS")
+  colnames(listings)[which(colnames(listings) == "F.")] <- "F#"
+
+```
+
+
+
+
+
+
+
+# Data Overview {#overview .tabset .tabset-fade .tabset-pills .pad}
+
+Glimpse and Summary give us a quick overview. Helpers are functions we'll use later on. 
+
+<br><br>
+
+## Glipmse 
+
+Although the number of unique job ads is fairly modest (`r listings %>% nrow`), there is some very rich data to explore. We have over a year's worth of data, with `listingDate`s ranging between `r listings$listingDate %>% range %>% as.Date %>% paste0(collapse = " and ")`
+
+```{r}
+listings %>% glimpse()
+```
+
+
+## Summary
+
+Summary for each variable (only included R and Python here, as other languages (along with R and Python) are explored more deeply later.
+
+```{r}
+listings %>% 
+  select(jobId:Python, first_seen, last_seen) %>% 
+  summary()
+```
+
+
+## Helpers
+
+Some functions are defined here for later use.
+
+```{r}
+
+#############################################################################
+### Define a function that collects colours for each programming language ###
+#############################################################################
+
+get_colour <- function(language) {
+  
+  language <- tolower(language)
+  
+  tryCatch({
+    colour <-
+      which((language_colours %>% names %>% tolower) %in% language) %>%
+      language_colours[[.]] %>% .$color
+  }
+  ,
+  error = function(e) {
+    colour <<- "#82E0AA" # Default if colour not found in list
+  }) 
+  
+  if(is.null(colour)) { colour <- "#82E0AA" } # Sets the colour if colour is NULL
+  if(language == "hadoop") { colour <- "#EEE72F"}
+  if(language == "sql") { colour <- "#4B4B4B"}
+  if(language == "tableau") { colour <- "#001F4E"}
+  if(language == "spark") { colour <- "#DC581B"}
+  if(language == "spss") { colour <- "#D70033"}
+  if(language == "d3") { colour <- "#F1993E"}
+  if(language == "stata") { colour <- "#125C8D"}
+  if(language == "golang") { colour <- "#00A7D1"}
+  if(language == "knime") { colour <- "#F8D200"}
+  if(language == "minitab") { colour <- "#6CB33F"}
+  
+  return(colour)
+}
+
+languages <- listings %>% select(R:Fortran) %>% colnames 
+language_colours <- fromJSON("https://raw.githubusercontent.com/ozh/github-colors/master/colors.json")
+colours <- languages %>% sapply(get_colour) %>% unlist %>% {
+  data.frame(language=names(.), colour_for_plot=unname(.), stringsAsFactors = FALSE)
+} # show_col(colours$colour_for_plot)
+colours_vec <- languages %>% sapply(get_colour)
+
+
+###################################
+### Define RColorBrewer helpers ###
+###################################
+
+show_all_colours <- function(colour_set_name) {
+  info <- brewer.pal.info[colour_set_name, ]
+  brewer.pal(n = info$maxcolors, name = colour_set_name)
+}
+
+
+low_colour <- function(colour_set_name) {
+  colours <- show_all_colours(colour_set_name)
+  colours[1]
+}
+
+high_colour <- function(colour_set_name) {
+  colours <- show_all_colours(colour_set_name)
+  colours[length(colours)]
+}
+
+
+#######################################
+### Define ggplot theme and helpers ###
+#######################################
+
+tidy_name <- function(name, n_char) {
+  ifelse(nchar(name) > (n_char - 2), 
+    {substr(name, 1, n_char) %>% paste0(., "..")},
+    name)
+}
+
+theme_precision <- theme_classic() + 
+  theme(axis.text = element_text(size=7.5),
+        axis.title = element_text(size=8),
+        plot.title.position = "plot",
+        axis.title.y=element_blank(),
+        panel.border = element_blank(), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        axis.line = element_line(colour = "black")
+        )
+
+################################################
+### Fix for wordcloud2() javascript conflict ###
+################################################
+
+# The latest version of wordcloud package has a problem rendering wordcloud charts and leaflet maps 
+# in the same RMarkdown. See: https://github.com/Lchiffon/wordcloud2/issues/37 
+# Until that's fixed, we use a simple workaround, which is to define a custom wordcloud function 
+# that doesn't run custom javascript on rendering
+
+wordcloud2a <- function (data, size = 1, minSize = 0, gridSize = 0, fontFamily = "Segoe UI", 
+          fontWeight = "bold", color = "random-dark", backgroundColor = "white", 
+          minRotation = -pi/4, maxRotation = pi/4, shuffle = TRUE, 
+          rotateRatio = 0.4, shape = "circle", ellipticity = 0.65, 
+          widgetsize = NULL, figPath = NULL, hoverFunction = NULL) 
+{
+  if ("table" %in% class(data)) {
+    dataOut = data.frame(name = names(data), freq = as.vector(data))
+  }
+  else {
+    data = as.data.frame(data)
+    dataOut = data[, 1:2]
+    names(dataOut) = c("name", "freq")
+  }
+  if (!is.null(figPath)) {
+    if (!file.exists(figPath)) {
+      stop("cannot find fig in the figPath")
+    }
+    spPath = strsplit(figPath, "\\.")[[1]]
+    len = length(spPath)
+    figClass = spPath[len]
+    if (!figClass %in% c("jpeg", "jpg", "png", "bmp", "gif")) {
+      stop("file should be a jpeg, jpg, png, bmp or gif file!")
+    }
+    base64 = base64enc::base64encode(figPath)
+    base64 = paste0("data:image/", figClass, ";base64,", 
+                    base64)
+  }
+  else {
+    base64 = NULL
+  }
+  weightFactor = size * 180/max(dataOut$freq)
+  settings <- list(word = dataOut$name, freq = dataOut$freq, 
+                   fontFamily = fontFamily, fontWeight = fontWeight, color = color, 
+                   minSize = minSize, weightFactor = weightFactor, backgroundColor = backgroundColor, 
+                   gridSize = gridSize, minRotation = minRotation, maxRotation = maxRotation, 
+                   shuffle = shuffle, rotateRatio = rotateRatio, shape = shape, 
+                   ellipticity = ellipticity, figBase64 = base64, hover = htmlwidgets::JS(hoverFunction))
+  chart = htmlwidgets::createWidget("wordcloud2", settings, 
+                                    width = widgetsize[1], height = widgetsize[2], 
+                                    sizingPolicy = htmlwidgets::sizingPolicy(viewer.padding = 0,
+                                                                             browser.padding = 0, browser.fill = TRUE))
+  chart
+}
+
+```
+# {.unlisted .unnumbered}
+
+
+
+
+
+# Preprocessing {#preprocessing .tabset .tabset-fade .tabset-pills .pad}
+
+A couple of useful features can be engineered out of existing ones. Let's make it easy fo ourselves later and produce these now.  
+
+<br><br>
+
+## Job Description 
+
+The job description is one of the most important fields, so it's important we make best use of it. Two fields provide a description of the job listing: `desktopAdTemplate` and `mobileAdTemplate`. Which should we use? A quick visual inspection of `mobileAdTemplate` shows some lower quality data - some words are joined together without a linebreak. I am not sure why? So using `desktopAdTemplate` instead would seem sensible, until we realise some  `r listings$desktopAdTemplate %>% nchar() %>% {.[.==0]} %>% length` entries for `desktopAdTemplate` contain no content.
+
+```{r}
+
+listings %>% 
+  select(desktopAdTemplate, mobileAdTemplate) %>% 
+  mutate(char_length_desktop = nchar(desktopAdTemplate)) %>% 
+  mutate(char_length_mobile = nchar(mobileAdTemplate)) %>% 
+  select(char_length_desktop, char_length_mobile) %>% 
+  pivot_longer(cols = char_length_desktop:char_length_mobile, names_to = "desktop_or_mobile") %>%
+  #filter(desktop_or_mobile != "char_length_mobile") %>% 
+  ggplot(aes(value, fill = desktop_or_mobile)) +
+  geom_histogram(bins = 30, position="dodge") +
+  theme_precision +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  scale_x_continuous(expand = c(0, 0), limits = c(-500, NA)) + # -500 so as to not lose zero.
+    labs(title = "Characters in Job Description - 
+         <span style='color:#F8766D;'><strong>Desktop</strong></span> / 
+         <span style='color:#00BFC4;'><strong>Mobile</strong></span>") +
+  # ggtitle("Characters in Job Description - Desktop / Mobile") +
+  theme(legend.position='none') +
+  xlab("Characters") +
+  theme(plot.title = element_markdown(lineheight = 1.1)) 
+
+```
+
+
+For this reason, a new variable called `jobDescription` is created that takes a default value of `desktopAdTemplate` unless it's of length zero, in which case it takes the value of `mobileAdTemplate`, like so:
+
+```
+listings <- listings %>% 
+  mutate(jobDescription = ifelse(nchar(desktopAdTemplate) == 0, mobileAdTemplate, desktopAdTemplate)) 
+```
+
+```{r}
+
+listings <- listings %>% 
+  mutate(jobDescription = ifelse(nchar(desktopAdTemplate) == 0, mobileAdTemplate, desktopAdTemplate)) 
+
+```
+
+
+The length of the new variable `jobDescription` is now between `r listings %>% pull(jobDescription) %>% nchar %>% range %>% { paste0(.[1], " and ", .[2]) }`. 
+
+
+## Recruiter Vs Employer
+
+It would be interesting to explore the differences in behaviour between professional recruiters and standard employers hiring for themselves, but there's no field that tells us whether a listing was posted by a recruiter or an employer. So **how can we figure it out which listings were posted by recuriters and which were posted by employers**? 
+
+The `advertiserName` field has `r listings$advertiserName %>% unique %>% length` unique entries, and no NAs (nor empty strings). Scanning for the term 'recruit' in their name only returns 35 results:
+
+```{r}
+listings %>%
+  select(jobId, mobileAdTemplate, advertiserName) %>%
+  mutate(advertiserName = tolower(advertiserName)) %>%
+  distinct(advertiserName, .keep_all = TRUE) %>%
+  mutate(recruiter = ifelse(str_detect(tolower(advertiserName), "recruit"), 1, 0)) %>% 
+  pull(recruiter) %>%
+  table %>% as.vector %>% `names<-`(c("Does not contain 'recruit'", "Contains 'recruit'"))
+
+```
+
+This method identifies 35 likely recruiters, but a visual scan of the data shows many more are present. So that's not accurate enough. Perhaps we can look for an identifiable pattern in these fields of interest? 
+```{r}
+listings %>% select(advertiserId, advertiserName, companyName, companyId) %>% 
+  kable %>% 
+  kable_styling(fixed_thead = T) %>% 
+  scroll_box(height = "400px")
+```
+<br><br>
+
+Fields with empty `companyName` values are recruiters. But looking closer reveals false positives, e.g.: `3M ANZ PTY LTD`, `Elula`, `Techspear`, `United Super Pty Ltd`, `Bupa`.
+
+Given this variable is important and inferential methods of obtaining it aren't accurate enough, I looked into third-party data labelling services, including Google's [AI Platform Data Labeling Service](https://cloud.google.com/ai-platform/data-labeling/docs) (currently in beta), and [Amazon SageMaker GroundTruth](https://www.youtube.com/watch?v=8J7y513oSsE). The former is able to label text, images and video, and simply requires us to provide a dataset and clear instructions. Amazon's offering is similar but involves humans labelling the first batch, before a machine learning model is trained on the newly labelled data to help reduce human workload on the rest of the dataset. This is very cool stuff - very 'meta'! 
+
+These options sound great for large datasets, but given this is a small dataset it would be most efficient to simply outsource the labelling to freelancers, which I did via a popular online freelancing platform. 2 hours later I had a fully lablled dataset, which can be joined back into our original dataset. 
+
+
+
+# {.unlisted .unnumbered}
+
+
+# Programming Languages & Software {#languages .pad}
+
+
+```{r}
+
+p1 <- listings %>% 
+  select(jobId, R:Fortran) %>% 
+  pivot_longer(cols = R:Fortran, names_to = "language") %>% 
+  group_by(language) %>% 
+  summarise(n=sum(value)) %>% 
+  # bind_rows(list(language="Lisp", n=0)) %>% # Adds Lisp in manually since n = 0 for lisp
+  arrange(desc(n)) %>% 
+  left_join(colours, by = c("language")) %>% 
+  mutate(language = factor(language, levels = unique(language))) %>% 
+  mutate(language = reorder(language, n)) %>% 
+  mutate(colour_for_plot = factor(colour_for_plot)) %>% 
+  ggplot(aes(language, n, fill = colour_for_plot)) + 
+  geom_col() +
+  scale_fill_identity() +
+  theme(axis.text.x = element_text(hjust = 1)) + 
+  ggtitle("Australian Data Scientist Jobs Listings by Language") +
+  xlab("Language") + 
+  scale_y_continuous(label=comma) +
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        legend.position='none') +
+  coord_flip() 
+  
+p1 %>%  ggplotly(tooltip = c("language", "n"))
+
+```
+
+Represented above are the counts of job ads as they appear in the search results for each language/software.
+
+Some (subjective) observations
+
+ - The obvious open source trio, Python, R and SQL make up the top 3
+ - Hadoop, Scala and Spark are all are also very popular
+ - Some of the more academic tools (Stata, Matlab, SPSS, Minitab) pale in comparison to the popularity of open source
+ - However, not all proprietary software is struggling: SAS still popular and Tableau doing very well
+
+
+Note: the term 'languages' is used loosly to mean 'programming languages *and* software', even though a lot of the software packages *aren't* programming languages per se - this is done purely for convenience.
+
+
+
+
+
+
+
+
+
+
+# Text Analysis Job Descriptions {#text .pad}
+
+Let's start by exploring the text content of job descriptions
+
+
+```{r}
+
+stop_words_except_languages <- stop_words %>% select(word) %>% filter(!word %in% c("r", "c", "f", "d", "q"))
+
+listing_words <- listings %>%
+  unnest_tokens(word, jobDescription) %>%
+  anti_join(stop_words_except_languages) %>%
+  distinct()
+
+p <- listing_words %>%
+  count(word, sort = TRUE) %>%
+  top_n(35) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot() +
+  geom_col(aes(word, n), fill = "blue") +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank()) +
+  xlab("") +
+  ylab("Number of Job Listings Containing Term") +
+  ggtitle("Most Common Words in Data Scientist Job Ads") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  coord_flip() +
+  theme_precision
+
+p %>% ggplotly
+```
+
+Unsurprisingly, some of the most common words are 'data', 'scientist' 'python', 'r', 'machine', and 'learning'. These results are very much as expected. 
+
+
+### Wordcloud {.pad}
+
+Here are the top 200 most frequently found words in wordcloud:
+
+```{r}
+listing_words %>% 
+  count(word, sort = TRUE) %>% 
+  head(200) %>%
+  wordcloud2a(size = .2, 
+             fontFamily ="Arial", 
+             # The choice of a two-scale colour oddly works
+             color=brewer.pal(n = 11, name = "RdYlGn"), 
+             shape = 'star',
+             ellipticity = 1.2)
+```
+
+
+
+
+
+## What is Each Language Used for? {.tabset .tabset-fade .tabset-pills .pad}
+
+It would be interesting to know the kinds of things each language is being used for. Let's remove stop words and generic terms from job descriptions and see which words remain, and how they differ by language.
+
+```{r, results='asis'}
+stop_words_except_languages <- stop_words %>% select(word) %>% filter(!word %in% c("r", "c", "f", "d", "q"))
+
+generic_words_to_exclude <- c("experience", "data", "scientist",
+                              "skills", "team", "role", "opportunity", "knowledge", 
+                              "ability", "projects", "highly", "complex", "environment",
+                              "including", "required", "technical", "management",
+                              "support", "strong", "excellent", "opportunities", "develop",
+                              "degree", "people", "key", "innovative", "industry", "technologies",
+                              "client", "information", "services", "provide",
+                              "seeking", "stakeholders", "position", "software", "applications",
+                              "developing", "culture", "considered", "based", "leading", "world",
+                              "time", "sets", "relevant", "organisation", "company", "identify", 
+                              "expertise", "datasets", "results", "global", "diverse", "clients",
+                              "solve", "understanding", "multiple", "proficiency", "life", "work",
+                              "career", "successful", "communicate", "passion", "delivering",
+                              "candidate", "applying", "field", "real", "proven", "project", 
+                              "driven", "apply", "passionate", "deliver", "platforms", "create", 
+                              "written", "outcomes", "offer", "operations", "flexible", "existing",
+                              "include", "responsible", "e.g", "build", "languages", "join", 
+                              "arrangements", as.character(1:10), "bring", "employer", "future",
+                              "qualifications", "requirements", "solving", "thrive",
+                              "superannuation", "diversity", "committed", "assess", "cover", 
+                              "qualification", "specialist", "responsibilities", "contact", "advanced",
+                              "senior", "sydney", "australian"
+)
+
+generic_words_to_exclude <- c(tolower(languages), generic_words_to_exclude)
+
+languages_to_include <- listings %>% 
+  pivot_longer(cols = R:Fortran, names_to = "Language") %>% 
+  filter(value == 1) %>% 
+  group_by(Language) %>% 
+  summarise(n=n()) %>% 
+  arrange(desc(n)) %>% 
+  filter(n > 4) %>% # n > 0
+  pull(Language) %>% 
+  unname
+
+plot <- listings %>% 
+  select(jobDescription, R:Fortran) %>% 
+  unnest_tokens(word, jobDescription) %>% 
+  anti_join(stop_words_except_languages) %>% 
+  distinct() %>% 
+  pivot_longer(cols = R:Fortran, names_to = "Language") %>%
+  filter(value == 1) %>% 
+  filter(!word %in% generic_words_to_exclude) %>% 
+  filter(Language %in% languages_to_include) %>% 
+  select(-value) %>% 
+  select(word, Language) %>% 
+  group_by(Language) %>% 
+  count(word, sort = TRUE) %>%
+  top_n(28) %>%
+  mutate(word = reorder(word, n)) %>%
+  select(word, Language, n) %>%   
+  mutate(word = reorder(word, n)) %>% 
+  group_by(Language, word) %>% 
+  arrange(desc(n)) %>% 
+  ungroup() %>% 
+  mutate(word = factor(paste(word, Language, sep="___"),
+                       levels = rev(paste(word, Language, sep="___")))) %>% 
+  ggplot() +
+  geom_col(aes(word, n, fill = Language)) + 
+  scale_fill_manual(values = colours_vec) + 
+  theme(legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +  
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  coord_flip() 
+
+plots <- lapply(seq_along(languages_to_include),
+                function(i) {
+                  plot <- plot + facet_wrap_paginate(~factor(Language, levels = languages_to_include), 
+                                                     ncol = 1, nrow = 1, page = i, scales="free") +
+                    scale_x_discrete(labels = function(x) gsub("___.+$", "", x))
+                }
+)
+
+for (i in 1:length(languages_to_include)) {
+  cat(paste0("\n\n### ", languages_to_include[i], "\n"))
+  print(plots[[i]])
+}
+
+```
+
+## {.unlisted .unnumbered}
+
+
+There are a *lot* of subtle, but intriguing observations to be discovered - here are some I see:
+
+- There is great similarity in the top words for python and R But the ordering is interesting:
+    - For R, 'analytics', is higher than (machine) 'learning' than it is for python
+    - For Python, the opposite is true
+    - 'models' is higher for R, and 'solutions' is higher for python (possibly hinting toward prototyping vs production ML modelling)
+    - 'statistical' and 'mathematics' are both higher in R than in python
+- 'visualisation' oddly shows up in SQL's top words - probably due to SQL being a language with great crossover
+
+
+### Which Languages are Preferred by Edcuational Institutions? {.pad}
+
+Here we scan the `advertiserName` for the presence of the term 'education', 'university', or 'college'. 
+
+Firstly, there are `r listings %>% filter(grepl("education|university|college", advertiserName, ignore.case = TRUE)) %>% nrow` listings whose `advertiserName` contains those terms (just `r listings %>% filter(grepl("education|university|college", advertiserName, ignore.case = TRUE)) %>% nrow %>% {. / nrow(listings)} %>% {. * 100} %>% round(1) %>% paste0(., "%")` of all listings) - I am surprised it's so low. In any case, let's see who they are and what they're using:
+
+Who are the Educational Institutions? 
+
+```{r}
+
+listings %>% 
+  filter(grepl("education|university|college", advertiserName, ignore.case = TRUE)) %>% 
+  pull(advertiserName) %>% 
+  unique %>% {data.frame(University = ., stringsAsFactors = FALSE)} %>% 
+  kable %>%
+  kable_styling("striped", full_width = T) 
+
+```
+
+And now let's explore which languages were most commonly mentioned in their job listings:
+
+
+```{r}
+
+listings %>% 
+  filter(grepl("education|university|college", advertiserName, ignore.case = TRUE)) %>% 
+  select(advertiserName, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "language") %>% 
+  filter(value == 1) %>% 
+  group_by(language) %>% 
+  summarise(n=n()) %>% 
+  arrange(desc(n)) %>% 
+  kable %>%
+  kable_styling("striped", full_width = T)
+
+```
+
+
+I expected to see higher use of languages like stata, matlab and SPSS - it's a welcome surprise to see universities moving away from proprietary software toward open source! 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<br><br><br><br><br><br><br>
+
+# Who's Hiring? {#who .pad}
+
+
+Let's explore the companies advertising data scientist roles. Firstly, who's advertising? (this includes both recruiters and employers)
+
+<br>
+
+```{r}
+
+p1 <- listings %>% 
+  group_by(advertiserName) %>% 
+  summarise(n=n(), ave_company_rating = mean(companyRating, na.rm = TRUE)) %>% 
+  arrange(desc(n)) %>% 
+  mutate(advertiserName = tidy_name(advertiserName, 40)) %>% 
+  head(30) %>% 
+  # Next line ensures the order remains in tact
+  mutate(advertiserName = factor(advertiserName, levels = rev(unique(advertiserName)))) %>% 
+  ggplot(aes(advertiserName, n, fill = ave_company_rating)) + 
+  geom_col(aes()) + 
+  scale_fill_gradient(high= high_colour("Greens"), low="#A1D99B", na.value = "grey80") + 
+  theme_precision  +  
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "none") + 
+  labs(title="Advertisers by Number of Data Scientist Job Listings",
+       subtitle = "Company Rating: <span style='color:#00441B';><strong>Best</strong></span> to
+          <span style='color:#A1D99B';><strong>Worst</strong></span>
+       (<span style='font-size: 16pt;color: #CCCCCC';>\u25A0</span> = no data)") +
+  theme(plot.title = element_markdown(lineheight = 1.1),
+        plot.subtitle = element_markdown(lineheight = 1.1)) +
+  coord_flip() 
+
+p1    
+
+```
+
+<br>
+
+We can see the top 30 advertisers account for more than a third (`r listings %>% group_by(advertiserName) %>% summarise(n=n()) %>% arrange(desc(n)) %>% head(30) %>% select(n) %>% sum()`) of all listings. Note that because many of the top 30 advertisers are recruiters, we don't have a company rating for them (signified by grey bars). 
+
+<br><br>
+
+Let's look at companies (i.e. excluding recruiters):
+
+```{r}
+
+listings %>% 
+  filter(recruiter == 0) %>% 
+  group_by(companyName) %>% 
+  summarise(n=n(), companyRating = mean(companyRating, na.rm=T)) %>% 
+  arrange(desc(n)) %>% 
+  mutate(companyName = tidy_name(companyName, 30)) %>% 
+  filter(companyName != "") %>% 
+  head(30) %>% 
+  # Next line ensures the order remains in tact
+  mutate(companyName = factor(companyName, levels = rev(unique(companyName)))) %>% 
+  ggplot(aes(companyName, n)) + 
+  geom_col(aes(fill = companyRating))  + 
+  scale_fill_gradient(high=high_colour("Greens"), low="#A1D99B", na.value = "grey80") +
+  theme_precision + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "none") + 
+  labs(title="Companies by Number of Data Scientist Job Listings",
+       subtitle = "Company Rating: <span style='color:#00441B';><strong>Best</strong></span> to
+          <span style='color:#A1D99B';><strong>Worst</strong></span>
+       (<span style='font-size: 16pt;color: #CCCCCC';>\u25A0</span> = no data)") +
+  theme(plot.title = element_markdown(lineheight = 1.1),
+        plot.subtitle = element_markdown(lineheight = 1.1)) +
+  coord_flip() 
+
+```
+
+
+
+### Which sectors are best to work in? {.minipad}
+
+Let's examine job listings by sector according to average company rating
+
+
+```{r}
+
+jobClassifications <- listings %>% 
+  group_by(jobClassification) %>% 
+  summarise(n=n(), ave_company_rating = mean(companyRating, na.rm = TRUE)) %>% 
+  arrange(desc(n)) %>% pull(jobClassification) %>% 
+  {.[!. %in% c("Information & Communication Technology", "Science & Technology")]}
+
+
+
+p1 <- listings %>% 
+  group_by(jobClassification) %>% 
+  summarise(n=n(), ave_company_rating = mean(companyRating, na.rm = TRUE)) %>% 
+  arrange(desc(n)) %>% 
+  mutate(jobClassification = factor(jobClassification, levels=rev(jobClassification))) %>% 
+  ggplot(aes(jobClassification, n, fill=ave_company_rating)) + 
+  geom_col() +
+  scale_fill_gradient(high=high_colour("Blues"), low="#9ECAE1", na.value = "grey80") +
+  theme_precision + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "none") + 
+  labs(title="Number of Listings by Industry",
+       subtitle = "Average Company Rating: <span style='color:#08306B';><strong>Best</strong></span> to
+          <span style='color:#9ECAE1';><strong>Worst</strong></span>") +
+  theme(plot.title = element_markdown(lineheight = 1.1),
+        plot.subtitle = element_markdown(lineheight = 1.1)) +
+  # facet_zoom(x = jobClassification %in% jobClassifications)
+  coord_flip() 
+
+p1 
+
+```
+<br><br>
+
+Observations
+
+ - Vast majority of roles are in ICT or Science & Tech sectors
+ - Very few Sport Data Scientists - disappointing, Australia! - you have a reputation to uphold!
+
+
+Given the top two Industries (ICT and Science & Technology) make up `r listings %>% group_by(jobClassification) %>% summarise(n=n()) %>% arrange(desc(n)) %>% select(n) %>% {sum(head(., 2)) / sum(.)} %>% {. * 100} %>% round(0) %>% paste0(., "%")` of all listings, let's take a quick look at their breakdown into sub sectors:
+
+```{r}
+
+listings %>% 
+  filter(jobClassification == "Information & Communication Technology") %>% 
+  group_by(jobSubClassification) %>% 
+  summarise(n=n(), ave_company_rating = mean(companyRating, na.rm = TRUE)) %>% 
+  arrange(desc(n)) %>% 
+  mutate(jobSubClassification = factor(jobSubClassification, levels=rev(jobSubClassification))) %>% 
+  ggplot(aes(jobSubClassification, n, fill=ave_company_rating)) + 
+  geom_col() +
+  scale_fill_gradient(high=high_colour("Blues"), low="#9ECAE1", na.value = "grey80") +
+  theme_precision + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "none") + 
+  labs(title="Breakdown of 'ICT' Sector by Sub-Sector",
+       subtitle = "Average Company Rating: <span style='color:#08306B';><strong>Best</strong></span> to
+          <span style='color:#9ECAE1';><strong>Worst</strong></span>
+       (<span style='font-size: 16pt;color: #CCCCCC';>\u25A0</span> = no data)") +
+  theme(plot.title = element_markdown(lineheight = 1.1),
+        plot.subtitle = element_markdown(lineheight = 1.1)) +
+  coord_flip() 
+
+```
+
+<br><br>
+Looks like data science developers/programmerrs really enjoy their work and/or get to work for better companies.
+
+
+
+```{r}
+
+listings %>% 
+  filter(jobClassification == "Science & Technology") %>% 
+  group_by(jobSubClassification) %>% 
+  summarise(n=n(), ave_company_rating = mean(companyRating, na.rm = TRUE)) %>% 
+  arrange(desc(n)) %>% 
+  mutate(jobSubClassification = factor(jobSubClassification, levels=rev(jobSubClassification))) %>% 
+  ggplot(aes(jobSubClassification, n, fill=ave_company_rating)) + 
+  geom_col() +
+  scale_fill_gradient(high=high_colour("Blues"), low="#9ECAE1", na.value = "grey80") +
+  theme_precision + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "none") + 
+  labs(title="Breakdown of 'Science & Technology' Sector by Sub-Sector",
+       subtitle = "Average Company Rating: <span style='color:#08306B';><strong>Best</strong></span> to
+          <span style='color:#9ECAE1';><strong>Worst</strong></span>
+       (<span style='font-size: 16pt;color: #CCCCCC';>\u25A0</span> = no data)") +
+  theme(plot.title = element_markdown(lineheight = 1.1),
+        plot.subtitle = element_markdown(lineheight = 1.1)) +
+  coord_flip() 
+
+```
+
+
+It also looks like data scientists working primarily in Mathematical fields *really* enjoy their work!
+
+
+
+
+
+
+
+
+
+
+
+# When are Job Listings are Posted? {#when .pad}
+
+
+Let's get an idea of the variation in new job listings by week. We see some weeks (notably around new year) offer very few new listings, whereas most of the rest of the year provides a steady stream of ~20 new listings per week.
+
+```{r}
+
+listings %>% 
+  mutate(listingDate = as.Date(listingDate)) %>% 
+  group_by(week = floor_date(listingDate, "week")) %>%
+  summarise(n=n()) %>% 
+  # Remove incomplete weeks
+  filter(week > as.Date('2019-01-13'), week < as.Date('2020-02-23')) %>%  
+  ggplot(aes(week, n)) +
+  geom_col(fill = "navyblue") +
+  scale_x_date() + 
+  theme_precision +
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank()) + 
+  theme(legend.position = "none") +
+  ggtitle("New Job Listings per Week")
+  
+```
+
+
+
+
+
+### Temporal Analysis {.tabset .tabset-fade .tabset-pills .pad}
+
+#### New Listings
+
+```{r}
+if(FALSE) { # !on_kaggle
+  anim1 <- listings %>% 
+  # Ensures exactly 1 year of data
+  filter(listingDate > max(listingDate) - (365 * 86400)) %>% 
+  select(listingDate, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "language") %>% 
+  filter(value == 1) %>% 
+  select(-value) %>% 
+  mutate(week = week(listingDate)) %>% 
+  group_by(language, week) %>% 
+  summarise(n=n()) %>% 
+  filter(week != 53) %>% 
+  ggplot(aes(language, n, fill = language)) +
+  geom_col(show.legend = FALSE) + 
+  scale_fill_manual(values = colours_vec) +
+  theme_precision + 
+  ggtitle("New Listings per Week by Language") +
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank()) + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  coord_flip() + 
+  labs(title = 'Week: {as.integer(frame_time)}') +
+  transition_time(week) + 
+  enter_grow() +
+  exit_fade()
+
+animate(anim1, nframes = 312, renderer = gifski_renderer("new_listings_weekly.gif"), duration = 12)
+}
+
+anim1_url <- "http://www.datasciencemeta.com/new_listings_weekly.gif"
+```
+<center><img src="`r anim1_url`" height=100% width=100%></center>
+
+
+
+
+
+
+
+#### Total Active Listings
+
+```{r}
+if(FALSE) { # !on_kaggle
+anim2 <- listings %>% 
+  # Ensures we use exactly 1 year of data
+  filter(first_seen > max(first_seen) - (365 * 86400)) %>% 
+  select(first_seen, last_seen, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "language") %>% 
+  filter(value == 1) %>%  
+  select(first_seen, last_seen, language) %>% 
+  mutate(
+    listing_week = as.Date(first_seen) %>% week,
+    last_seen_week = last_seen %>% week
+  ) %>% 
+  select(-first_seen, -last_seen) %>% 
+  mutate(week = map2(listing_week, last_seen_week, seq)) %>% 
+  unnest(week) %>% 
+  count(language, week) %>% 
+  filter(week != 53) %>% 
+  ggplot(aes(language, n, fill = language)) +
+  geom_col(show.legend = FALSE) + 
+  scale_fill_manual(values = colours_vec) +
+  theme_precision + 
+  ggtitle("Total Active Listings per Week by Language") +
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank()) + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  coord_flip() + 
+  labs(title = 'Week: {as.integer(frame_time)}') +
+  transition_time(week) + 
+  enter_grow() +
+  exit_fade()
+
+animate(anim2, nframes = 312, renderer = gifski_renderer("total_active_listings_weekly.gif"), duration = 12)
+}
+
+anim2_url <- "http://www.datasciencemeta.com/total_active_listings_weekly.gif"
+```
+
+<center><img src="`r anim2_url`" height=100% width=100%></center>
+
+### {.unlisted .unnumbered}
+
+
+Several observations:
+
+- There is quite a degree of variation in new listings from week-to-week. But we should expect that in a relatively refined job market.
+- SQL, R and Python seem to move mostly in tandem, hinting that that a high proportion of listings probably mention all 3 (more on that later)
+- Observe the patterns in the less common or more specialised data science languages like Fortran, Stata, Golang, and Julia - there are lengthy stretches (in some cases months) without new listings. 
+
+
+
+
+### Time of Day {.pad}
+
+The time of day that news media and social media are posted can affect their views and interactions. Is the same true of job ads, and if so, how could we tell? (we don't have any data on number of views or applications). A couple of ideas;
+
+* We could expect recruiters to be better than employers, since it's their specialty - so we can spot any differences in posting patterns?
+* When do jobs fill the fastest? 
+
+```{r}
+
+listings %>% 
+  mutate(
+    listingDate = listingDate,  
+    listing_hour = hour(listingDate),
+    listing_day = wday(listingDate) %>% wday(label = TRUE, abbr = FALSE)
+  ) %>% 
+  group_by(listing_day, listing_hour) %>% 
+  summarise(Freq = n()) %>% 
+  mutate(lab = sprintf('%02d:00', listing_hour)) %>%
+  ggplot(aes(lab, listing_day, fill = Freq)) +
+  geom_tile(colour = "ivory") +
+  labs(x = "Hour of the day", y = "Day of the week") +
+  scale_fill_gradient(low = low_colour("YlOrRd"), high=("#FC4E2A")) + # low = "#f4fff6", high="#0bb730"
+  theme_precision +
+  theme(
+    panel.border = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line=element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text()
+  )  + 
+  ggtitle("When are Data Science Job Listings Posted?") + 
+  coord_flip()
+
+```
+
+
+
+Very interesting. Looks like Friday afternoon is a popular time to post data science job ads. I wonder if that's because people leave things until the last minute, or if there's more to it. Sometimes news media articles and social media posts are intelligently timed to maximise metrics like impressions etc, so perhaps Friday afternoon is optimal so those job ads are at the top of weekend search results. 
+
+Let's see if recruiters and employers behave the same way:
+
+
+```{r}
+
+r <- listings %>% 
+  filter(recruiter == 1) %>% 
+  mutate(
+    listingDate = listingDate,
+    listing_hour = hour(listingDate),
+    listing_day = wday(listingDate) %>% wday(label = TRUE, abbr = FALSE)
+  ) %>% 
+  group_by(listing_day, listing_hour) %>% 
+  summarise(Freq = n()) %>%  
+  ungroup %>% 
+  mutate(listing_day = substr(listing_day, 1, 2)) %>% 
+  mutate(listing_day = factor(listing_day, levels = unique(listing_day))) %>% 
+  mutate(lab = sprintf('%02d:00', listing_hour)) %>%
+  ggplot(aes(lab, listing_day, fill = Freq)) +
+  geom_tile(colour = "ivory") +
+  labs(x = "Hour of the day", y = "Day of the week") +
+  scale_fill_gradient(low = low_colour("PuBu"), high=high_colour("PuBu")) + 
+  theme_precision +
+  theme(
+    panel.border = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line=element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text()
+  )   + 
+  ggtitle("Recruiter Job Listings") + 
+  coord_flip()
+
+e <- listings %>% 
+  filter(recruiter == 0) %>% 
+  mutate(
+    listingDate = listingDate,
+    listing_hour = hour(listingDate),
+    listing_day = wday(listingDate) %>% wday(label = TRUE, abbr = FALSE)
+  ) %>% 
+  group_by(listing_day, listing_hour) %>% 
+  summarise(Freq = n()) %>% 
+  ungroup %>% 
+  mutate(listing_day = substr(listing_day, 1, 2)) %>% 
+  mutate(listing_day = factor(listing_day, levels = unique(listing_day))) %>% 
+  mutate(lab = sprintf('%02d:00', listing_hour)) %>%
+  ggplot(aes(lab, listing_day, fill = Freq)) +
+  geom_tile(colour = "ivory") +
+  labs(x = "Hour of the day", y = "Day of the week") +
+  scale_fill_gradient(low = "white", high=low_colour("RdBu")) +
+  theme_precision +
+  theme(
+    panel.border = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line=element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text()
+  )   + 
+  ggtitle("Employer Job Listings") + 
+  coord_flip()
+
+r + e
+
+```
+
+Looks like HR professionals work more standard hours (9am - 5pm) when they're working for a company as opposed to a recruiter. Recruiters tend to post listings late afternoon. This could hint as to an optimal time, or it could simply be because they're more busy during the day - I am not sure. 
+
+It appears that recrutiers tend to advertise Tuesday and Friday afternoons, whereas employers tend to post on Wednesday afternoons and Thursday mornings. I don't know enough about the HR industry to be able to interpret this - perhaps there's more to it, or perhaps it's mostly noise.
+
+
+Here's the relative *difference* between recruiters' and employers' timing:
+```{r}
+
+recruiter_hours <- listings %>% 
+  filter(recruiter == 0) %>% 
+  mutate(
+    listingDate = listingDate,
+    listing_hour = hour(listingDate),
+    listing_day = wday(listingDate) %>% wday(label = TRUE, abbr = FALSE)
+  ) %>% 
+  group_by(listing_day, listing_hour) %>% 
+  summarise(Freq = n()) 
+
+employer_hours <- listings %>% 
+  filter(recruiter == 1) %>% 
+  mutate(
+    listingDate = listingDate,
+    listing_hour = hour(listingDate),
+    listing_day = wday(listingDate) %>% wday(label = TRUE, abbr = FALSE)
+  ) %>% 
+  group_by(listing_day, listing_hour) %>% 
+  summarise(Freq = n()) 
+
+recruiter_hours %>% 
+  full_join(employer_hours, by = c("listing_day", "listing_hour")) %>% 
+  rename(recruiter = Freq.x, employer = Freq.y) %>% 
+  mutate_at(vars(recruiter, employer), replace_na, 0) %>% 
+  ungroup %>% 
+  mutate(
+    recruiter_pc =  (recruiter / sum(recruiter)) * 100,
+    employer_pc =  (employer / sum(employer)) * 100
+  ) %>% 
+  mutate(difference_pc = recruiter_pc - employer_pc)  %>% 
+  mutate(difference_pc = round(difference_pc, 3)) %>% 
+  mutate(lab = sprintf('%02d:00', listing_hour)) %>%
+  ggplot(aes(lab, listing_day, fill = difference_pc)) +
+  geom_tile(colour = "ivory") +
+  labs(x = "Hour of the day", y = "Day of the week") +
+  scale_fill_gradientn(colors = c(high_colour("RdBu"), "white", low_colour("RdBu"))) + 
+  theme_precision +
+  theme(
+    panel.border = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line=element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text()
+  ) + 
+  coord_flip() +
+  labs(title = 
+         "Difference between <span style='color:#053061;'><strong>Recruiters</strong>
+       </span>and<span style='color:#67001F;'>
+       <strong>Employers</strong></span>") +
+  theme(plot.title = element_markdown(lineheight = 1.1)) 
+
+```
+
+ 
+
+
+
+<br><br><br><br><br><br><br>
+
+# Where in Australian are data science jobs based? {#where .pad}
+
+
+Let's now explore where data science jobs are based. 
+
+```{r}
+
+p1 <- listings %>% 
+  group_by(isRightToWorkRequired) %>% 
+  summarise(n=n()) %>% 
+  mutate(isRightToWorkRequired = case_when(isRightToWorkRequired == "f" ~ "Not Required",
+                                           isRightToWorkRequired == "t" ~ "Required")
+         ) %>% 
+  ggplot(aes(x=isRightToWorkRequired, y=n, fill = isRightToWorkRequired)) +
+  geom_col() + 
+  scale_y_continuous(label=comma) +
+  ggtitle("Do Job Listings Require Applicant to have Right to Work in Australia?") +
+  theme_precision +
+  theme(legend.position = "none") +
+  ylab(element_blank()) +
+  coord_flip()
+  
+p2 <- listings$workType %>% 
+  table %>% as.data.frame %>% 
+  `colnames<-`(c('workType', 'Frequency')) %>% 
+  ggplot(aes(workType, Frequency, fill = workType)) + 
+  geom_col() +
+  ggtitle("Work Type") +
+  theme_precision +
+  theme(legend.position = "none") +
+  coord_flip()
+
+# p2 <- ggplotly(p2)
+# subplot(p1, p2, nrows=2)
+
+p1 / p2
+```
+
+Only a third of listings require the right to work in Australia, and the vast majority of the roles are either Full-time or Contract roles (very few part-time or casual).
+
+
+All but one of the roles were located in Australia (one was for a position in the UK). The state with the most data science roles was NSW, which is Australia's most populous state. 
+
+
+```{r}
+
+listings %>% 
+  group_by(state) %>% 
+  summarise(n=n()) %>% 
+  arrange(desc(n)) %>% 
+  kable %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  kable_styling(fixed_thead = T)
+
+```
+
+
+These results are somewhat surpising. Just 1 data science job in a year for the NT! Either they're well behind the curve or there just isn't much need for data science there! But NT is also the smallest by population..
+
+Let's see if anything changes once we adjust for population size:
+
+
+```{r}
+
+# Grab Australian population stats by state/territory from the Australian Bureau of Statistics
+
+state_pop <- "https://www.abs.gov.au/statistics/people/population/national-state-and-territory-population/latest-release" %>% 
+  read_html %>% 
+  html_nodes('table') %>% 
+  .[[3]] %>% html_nodes('td') %>% html_text %>% 
+  .[seq(13, 13 + 7 * 4, 4)] %>% # Every fourth element from the 13th one onwards
+  str_replace_all(" ", "") %>% 
+  as.numeric %>% 
+  `*`(1000)
+
+state <- "https://www.abs.gov.au/statistics/people/population/national-state-and-territory-population/latest-release" %>% 
+  read_html %>% 
+  html_nodes('table') %>% 
+  .[[3]] %>% html_nodes('td') %>% html_text %>% 
+  .[seq(12, 12 + 7 * 4, 4)] %>% # Every fourth element from the 12th one onwards
+  trimws
+
+aus_pop_by_state <- data.frame(state, state_pop, stringsAsFactors = FALSE)
+
+ds_listings_by_state <- listings %>% 
+  filter(state != "UK & Ireland") %>% 
+  group_by(state) %>% 
+  summarise(n=n()) %>% 
+  arrange(desc(n)) %>% 
+  mutate(state = str_replace(state, "Northern Territories", "Northern Territory")) %>% 
+  left_join(aus_pop_by_state) %>% 
+  mutate(job_listings_per_100k = round((n/(state_pop/100000)), 2))
+  
+
+ds_listings_by_state %>% 
+  kable %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  kable_styling(fixed_thead = T)
+
+```
+
+
+
+
+
+
+```{r}
+
+# Get coords of Australian cities
+aus_cities <- world.cities %>% 
+  filter(country.etc == "Australia")
+
+listings <- listings %>% 
+  mutate(city = case_when(
+    city == "ACT" ~ "Canberra", # [Althugh the ACT is a state, its only city is Canberra](https://www.act.gov.au/browse/about-act)
+    city == "Toowoomba & Darling Downs" ~"Toowoomba",
+    city == "Tamworth & North West NSW" ~"Tamworth",
+    city == "Blue Mountains & Central West" ~ "Orange", # only one in dataset so look up manually
+    city == "Newcastle, Maitland & Hunter" ~ "Newcastle",
+    city == "South West Coast VIC" ~ "Geelong",
+    city == "Bendigo, Goldfields & Macedon Ranges" ~ "Bendigo",
+    city == "Wagga Wagga & Riverina" ~ "Wagga Wagga",
+    city == "Gosford & Central Coast" ~ "Newcastle", # Gosford not in maps::world.cities 
+    city == "Northern QLD" ~ "Townsville",
+    city == "Albury Area" ~ "Albury",
+    TRUE ~ city # This is important as it sets the default city to itself
+  )) %>% 
+  left_join(aus_cities, by = c("city"="name"))
+
+```
+
+
+
+### Total Listings by State
+
+```{r}
+
+# library(rnaturalearthhires) 
+# devtools::install_github('ropensci/rnaturalearthhires') 
+aussie_states <- rnaturalearth::ne_states(country = 'australia')
+
+state_num_ds_listings_for_choropleth <- aussie_states$name %>% 
+  data.frame(name = ., stringsAsFactors = FALSE) %>% 
+  left_join(., ds_listings_by_state, by = c("name"="state")) %>% 
+  pull(n)
+
+custom_bins <- c(seq(0, 700, 100))
+
+custom_palette <- colorBin(palette = "YlOrBr", 
+                           domain = state_num_ds_listings_for_choropleth, 
+                           na.color = "transparent", 
+                           bins = custom_bins)
+
+# Tooltips:
+custom_text <- paste(
+  "State: ", aussie_states$name,"<br/>", 
+  "DS Listings: ", round(state_num_ds_listings_for_choropleth, 2), 
+  sep="") %>%
+  lapply(htmltools::HTML)
+
+# Final Map
+m <- leaflet(aussie_states) %>% 
+  addTiles(urlTemplate = 'http://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png')  %>% 
+  setView(lat = -29.15, lng = 130.25 , zoom=4) %>%  
+  addPolygons( 
+    fillColor = ~custom_palette(state_num_ds_listings_for_choropleth), 
+    stroke = TRUE, 
+    fillOpacity = 0.8, 
+    color = "white", 
+    weight = 0.3,
+    label = custom_text,
+    labelOptions = labelOptions( 
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "13px", 
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(
+    pal = custom_palette, 
+    values = ~state_num_ds_listings_for_choropleth, 
+    opacity=0.9, 
+    title = "DS Listings", 
+    position = "bottomleft"
+  ) %>% 
+  addMarkers(lat = listings$lat, 
+             lng = listings$long,
+             clusterOptions = markerClusterOptions()
+  )
+
+m
+```
+
+
+
+
+###  Total Listings Per (100k) Capita by State {.minipad}
+
+The NT still has the fewest listings even on per capita basis, but wow - we now see the ACT has a whopping 23 data science job listings per 100k population! Some background: ACT is home to Australia's parliament and many major government departments - perhaps they were slow on the initial uptake of data science in previous years and were making up for it in 2019/2020? Or were they ahead of the curve and busy recruiting for the years ahead!? The tiny state has three times the listings per capita of NSW!
+
+```{r}
+
+state_ds_listings_per_100k_for_choropleth <- aussie_states$name %>% 
+  data.frame(name = ., stringsAsFactors = FALSE) %>% 
+  left_join(., ds_listings_by_state, by = c("name"="state")) %>% 
+  pull(job_listings_per_100k)
+
+custom_bins <- c(0, 0.5, 1, seq(2, 8, 2), seq(10, 25, 5)) # seq(0, 25, 2.5) # c(0, 0.5, 1, 2, 3, seq(4, 8, 2), seq(10, 25, 5))
+
+custom_palette <- colorBin(palette = "RdPu", 
+                           domain = state_ds_listings_per_100k_for_choropleth, 
+                           na.color = "transparent", 
+                           bins = custom_bins)
+
+# Tooltips:
+custom_text <- paste(
+  "State: ", aussie_states$name,"<br/>", 
+  "DS Listings Per 100k: ", round(state_ds_listings_per_100k_for_choropleth, 2), 
+  sep="") %>%
+  lapply(htmltools::HTML)
+
+# Final Map
+m <- leaflet(aussie_states) %>% 
+  addTiles(urlTemplate = 'http://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png') %>% 
+  setView(lat = -34.65, lng = 140.25 , zoom=5) %>%  # -29.15, lng = 130.25
+  addPolygons( 
+    fillColor = ~custom_palette(state_ds_listings_per_100k_for_choropleth), 
+    stroke = TRUE, 
+    fillOpacity = 0.6, 
+    color = "white", 
+    weight = 0.3,
+    label = custom_text,
+    labelOptions = labelOptions( 
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "13px", 
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(
+    pal = custom_palette, 
+    values = ~state_ds_listings_per_100k_for_choropleth, 
+    opacity=0.9, 
+    title = "Listings Per 100K Population", 
+    position = "bottomleft"
+  ) 
+
+m
+```
+
+
+
+
+
+
+
+
+
+<br><br><br><br><br><br><br>
+
+# Salaries {#salaries .pad}
+
+Let's take a look at salary
+
+```{r}
+listings$salary_string[1:50]
+```
+
+Looks like a lot of jobs don't reveal the salary (i.e. `""` empty string values). There's a lot of interesting data in the non-missing values, but the values are all in character strings! To enable us to do something interesting with this data, we will first need to convert it to numeric data. 
+
+In Australia, [full time workers are paid at least $740.80 for a 38-hour week](https://www.business.gov.au/People/Pay-and-conditions/Employees-pay-leave-and-entitlements), so the `exclude_below` parameter is set to `740.80 * 48`.
+
+
+```
+library(priceR)
+
+listings <- listings$salary_string %>% 
+  extract_salary(
+    # Regular expressions aren't perfect, so exclude spurious results:
+    exclude_below = 740.80  * 48,  # Set to minimum Austrlaian full time salary
+    exclude_above = 600000, # Set some upper bound
+    include_periodicity = TRUE,
+    working_weeks_per_year = 48 # Since a typical working year in Australia has 48 weeks
+    ) %>% 
+  cbind(listings, .)
+```
+
+```{r}
+
+library(priceR)
+
+listings <- listings$salary_string %>% 
+  extract_salary(
+    # Regular expressions aren't perfect, so exclude spurious results:
+    exclude_below = 740.80  * 48,  # Set to minimum Austrlaian full time salary
+    exclude_above = 600000, # Set some upper bound
+    include_periodicity = TRUE,
+    working_weeks_per_year = 48 # Since a typical working year in Australia has 48 weeks
+    ) %>% 
+  cbind(listings, .)
+
+```
+
+This gives us two extra columns; `salary` and `periodicity`. 
+
+Although of lot of listings didn't provide *any* salary information, we now have the salary for `r listings$salary %>% { !is.na(.) } %>% sum` of `r nrow(listings)` listings, so we can explore those which we have. 
+
+Australian data scientist salaries range from **`r listings$salary[!is.na(listings$salary)] %>% range %>% format_dollars %>% paste0(collapse=" - ")`**, with an **average of `r listings$salary %>% mean(na.rm=T) %>% format_dollars`** and median of `r listings$salary %>% median(na.rm=TRUE) %>% format_dollars`
+
+
+## Salary by Language {.tabset .tabset-fade .tabset-pills .pad}
+
+### Distribution By Language
+
+```{r}
+listings %>% 
+  select(salary, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "language") %>% 
+  filter(value == 1) %>% 
+  select(language, salary) %>% 
+  filter(!is.na(salary)) %>% 
+  ggplot( aes(x = salary, y = language, fill = ..x..)) +
+  geom_density_ridges_gradient(scale = 1, rel_min_height = 0.01) +
+  scale_fill_viridis() +
+  labs(title = 'Salary Distribution by Language') +
+    theme(
+      legend.position="none",
+      panel.spacing = unit(0.1, "lines"),
+      strip.text.x = element_text(size = 8)
+    ) +
+  theme_precision  +
+  theme(legend.position = "none",
+        axis.title.x = element_blank()) +
+  scale_x_continuous(labels = scales::dollar, breaks = pretty_breaks()) 
+
+```
+
+### Aggregate Distribution
+
+```{r}
+
+listings %>%
+  select(salary, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "Language") %>% 
+  filter(value == 1) %>% 
+  select(-value) %>% 
+  group_by(Language) %>% 
+  filter(n() > 20) %>% 
+  ungroup %>% 
+  ggplot(aes(salary, fill = Language)) +
+  geom_histogram(bins = 30) +
+  labs(title = 'Distribution of Salary by Language') + 
+  scale_x_continuous(labels = scales::dollar, breaks = pretty_breaks(n = 10)) +
+  theme_precision 
+
+```
+
+
+### Averages
+
+Note the sample sizes on the right - some of these figures are from very small samples, so should be interpreted with great caution.
+
+```{r fig.height=20}
+
+listings %>% 
+  select(salary, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "language") %>% 
+  filter(value == 1) %>% 
+  select(language, salary) %>% 
+  group_by(language) %>% 
+  summarise(ave_salary = mean(salary, na.rm = TRUE),
+            median_salary = median(salary, na.rm = TRUE),
+            n = n()) %>% 
+  filter(!is.na(ave_salary)) %>% 
+  arrange(desc(ave_salary)) %>% 
+  mutate(ave_salary = format_dollars(ave_salary)) %>% 
+  mutate(median_salary = format_dollars(median_salary)) %>% 
+  kable %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  kable_styling(fixed_thead = T)
+
+```
+
+## {.unlisted .unnumbered}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Salary by State {.tabset .tabset-fade .tabset-pills .pad}
+
+
+#### Average Salary by State
+
+```{r}
+
+ds_salaries_by_state <- listings %>% 
+  filter(state != "UK & Ireland") %>% 
+  group_by(state) %>% 
+  summarise(n=n(), ave_salary = mean(salary, na.rm = TRUE), med_salary = median(salary, na.rm = TRUE)) %>% 
+  arrange(desc(n)) %>% 
+  mutate(state = str_replace(state, "Northern Territories", "Northern Territory")) %>% 
+  left_join(aus_pop_by_state) %>% 
+  mutate(job_listings_per_100k = round((n/(state_pop/100000)), 2))
+  
+state_ds_salaries_for_choropleth <- aussie_states$name %>% 
+  data.frame(name = ., stringsAsFactors = FALSE) %>% 
+  left_join(., ds_salaries_by_state, by = c("name"="state")) %>% 
+  pull(ave_salary)
+
+custom_bins <- c(0, 80, seq(100, 160, 10)) * 1000 # seq(0, 25, 2.5) # c(0, 0.5, 1, 2, 3, seq(4, 8, 2), seq(10, 25, 5))
+
+custom_palette <- colorBin(palette = "Greens", 
+                           domain = state_ds_salaries_for_choropleth, 
+                           na.color = "transparent", 
+                           bins = custom_bins)
+
+# Tooltips:
+custom_text <- paste(
+  "State: ", aussie_states$name,"<br/>", 
+  "Average Salary: ", round(state_ds_salaries_for_choropleth, 2), 
+  sep="") %>%
+  lapply(htmltools::HTML)
+
+# Final Map
+m <- leaflet(aussie_states) %>% 
+  addTiles(urlTemplate = 'http://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png') %>% 
+  setView(lat = -29.15, lng = 130.25 , zoom=4) %>%  
+  addPolygons( 
+    fillColor = ~custom_palette(state_ds_salaries_for_choropleth), 
+    stroke = TRUE, 
+    fillOpacity = 0.6, 
+    color = "white", 
+    weight = 0.3,
+    label = custom_text,
+    labelOptions = labelOptions( 
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "13px", 
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(
+    pal = custom_palette, 
+    values = ~state_ds_salaries_for_choropleth, 
+    opacity=0.9, 
+    title = "Average DS Salary", 
+    position = "bottomleft"
+  ) 
+
+m
+```
+
+#### Median Salary by State
+```{r}
+
+ds_salaries_by_state <- listings %>% 
+  filter(state != "UK & Ireland") %>% 
+  group_by(state) %>% 
+  summarise(n=n(), ave_salary = mean(salary, na.rm = TRUE), med_salary = median(salary, na.rm = TRUE)) %>% 
+  arrange(desc(n)) %>% 
+  mutate(state = str_replace(state, "Northern Territories", "Northern Territory")) %>% 
+  left_join(aus_pop_by_state) %>% 
+  mutate(job_listings_per_100k = round((n/(state_pop/100000)), 2))
+
+state_ds_salaries_for_choropleth <- aussie_states$name %>% 
+  data.frame(name = ., stringsAsFactors = FALSE) %>% 
+  left_join(., ds_salaries_by_state, by = c("name"="state")) %>% 
+  pull(med_salary)
+
+custom_bins <- c(0, 80, seq(100, 160, 10)) * 1000 # seq(0, 25, 2.5) # c(0, 0.5, 1, 2, 3, seq(4, 8, 2), seq(10, 25, 5))
+
+custom_palette <- colorBin(palette = "Greens", 
+                           domain = state_ds_salaries_for_choropleth, 
+                           na.color = "transparent", 
+                           bins = custom_bins)
+
+# Tooltips:
+custom_text <- paste(
+  "State: ", aussie_states$name,"<br/>", 
+  "Median Salary: ", round(state_ds_salaries_for_choropleth, 2), 
+  sep="") %>%
+  lapply(htmltools::HTML)
+
+# Final Map
+m <- leaflet(aussie_states) %>% 
+  addTiles(urlTemplate = 'http://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png') %>% 
+  setView(lat = -29.15, lng = 130.25 , zoom=4) %>%  
+  addPolygons( 
+    fillColor = ~custom_palette(state_ds_salaries_for_choropleth), 
+    stroke = TRUE, 
+    fillOpacity = 0.6, 
+    color = "white", 
+    weight = 0.3,
+    label = custom_text,
+    labelOptions = labelOptions( 
+      style = list("font-weight" = "normal", padding = "3px 8px"), 
+      textsize = "13px", 
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(
+    pal = custom_palette, 
+    values = ~state_ds_salaries_for_choropleth, 
+    opacity=0.9, 
+    title = "Median DS Salary", 
+    position = "bottomleft"
+  ) 
+
+m
+```
+
+
+
+#### Distributions
+
+```{r}
+
+listings %>% 
+  select(state, salary) %>% 
+  filter(!is.na(salary)) %>% 
+  filter(!state %in% c("Tasmania", "Northern Territories")) %>% 
+ggplot( aes(x = salary, y = state, fill = ..x..)) +
+  geom_density_ridges_gradient(scale = 1, rel_min_height = 0.01) +
+  scale_fill_viridis() +
+  labs(title = 'Salary Distribution by State') +
+    theme(
+      legend.position="none",
+      panel.spacing = unit(0.1, "lines"),
+      strip.text.x = element_text(size = 8)
+    ) +
+  theme_precision  +
+  theme(legend.position = "none",
+        axis.title.x = element_blank()) +
+  scale_x_continuous(labels = scales::dollar, breaks = pretty_breaks()) 
+
+```
+
+
+### {.unlisted .unnumbered}
+
+
+
+
+
+
+
+
+### Periodicity {.pad}
+
+Let's explore periodicity. The vast majority of listings are on annual salaries, but some are listed as daily or hourly rates. We can see from the distribution that daily rates tend to offer the very highest pay rates, with hourly rates also very high. This is probably reflective of shorter contract durations and/or a greater need to fill certain roles more quickly (more on that in next section). 
+
+```{r}
+
+listings %>%
+  select(salary, periodicity) %>% 
+  ggplot(aes(salary, fill = periodicity)) +
+  geom_histogram(bins = 30) +
+  labs(title = "Annualised Salary by Payment Increment - 
+       <span style='color:#F8766D;'><strong>Annual</strong></span>, 
+       <span style='color:#00BA38;'><strong>Daily</strong></span>, 
+       <span style='color:#619CFF;'><strong>Hourly</strong></span>") + 
+  xlab("Annualised Salary") +
+  scale_x_continuous(labels = scales::dollar, breaks = pretty_breaks(n = 10)) +
+  theme_precision +
+  theme(plot.title = element_markdown(lineheight = 1.1)) + 
+  guides(fill=FALSE) # Removes legend for fill
+
+```
+
+
+
+
+
+
+
+
+
+
+
+### Salary Distribution by Industry Sub Sector  {.tabset .tabset-fade .tabset-pills .pad}
+
+
+
+#### Subsector 
+
+Here we see the distributions of salaries by industry (sub classification). 
+
+```{r}
+
+range_order <- listings %>% 
+  select(jobSubClassification, salary) %>% 
+  filter(!is.na(salary)) %>% 
+  group_by(jobSubClassification) %>% 
+  summarise(sal_range = range(salary, na.rm = TRUE) %>% {`-`(.[1] - .[2])}) %>% 
+  arrange(sal_range) %>% 
+  pull(jobSubClassification) 
+
+
+p <- listings %>% 
+  select(jobSubClassification, salary) %>% 
+  filter(!is.na(salary)) %>% 
+  ggplot(
+    aes(
+      factor(jobSubClassification, levels = rev(range_order), ordered = TRUE), 
+      salary, 
+      color = factor(jobSubClassification, levels = rev(range_order), ordered = TRUE))
+    ) +
+  geom_boxplot() +
+  labs(x = "Days Listing Remained Online (default 30)") +
+  theme_precision +
+  theme(legend.position = "none",
+        axis.title.x = element_blank()) +
+  scale_y_continuous(labels = scales::dollar, breaks = pretty_breaks()) +
+  ggtitle("Salary (Distribution) by Industry Sub Classification") +
+  coord_flip() 
+
+# ggplotly(p)
+p
+
+```
+
+
+
+
+#### Urgency
+
+I would have guessed that urgent listings would be both higher paid and faster to fill, so I expected to see higher variance in the 0 - 14 day range. But there is greater disparity and longer right tail at the other end of the spectrum between the 27 - 31 days range. I suspect this may be due to more difficult-to-fill jobs paying more (e.g. jobs in odd locations, or at less desirable companies), but this is purely speculation.
+
+```{r}
+
+start_of_research_period <- as.Date(min(listings$first_seen))
+end_of_research_period <- as.Date(max(listings$last_seen))
+
+listings %>% 
+  filter(
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30) %>% 
+  mutate(
+    days_to_fill = as.numeric(as.Date(last_seen)) - as.numeric(as.Date(first_seen))
+  ) %>%
+  select(days_to_fill, salary) %>% 
+  filter(!is.na(salary)) %>% 
+  ggplot(aes(factor(days_to_fill), salary, color = factor(days_to_fill))) +
+  geom_boxplot() +
+  labs(x = "Days Listing Remained Online (default 30)") +
+  theme_precision +
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::dollar, breaks = pretty_breaks()) +
+  ggtitle("Does Salary Distribution Vary with Days Online?")
+
+```
+
+
+
+
+### {.unlisted .unnumbered}
+
+
+
+
+
+
+
+
+
+
+
+# Recruiters vs Employers {#recruiters .pad}
+
+I was curious as to whether professional recruiters advertise higher salaries than employers hiring for themselves. Could we simply compare the average/median salaries betweent the two groups? There would be a problem with that - we have no way of telling whether the roles/companies for which recruiters are engauged to hire for are the same as those for which employers hire for. Still, we can inspect the data to see what interesting things can be learned
+
+```{r}
+
+#--- Salary Distribution ---#
+sample_size_1 <- listings %>% 
+  select(recruiter, salary) %>% 
+  filter(!is.na(salary)) %>% 
+  group_by(recruiter) %>% 
+  summarise(n=n()) 
+
+p1 <- listings %>% 
+  left_join(sample_size_1, by = c("recruiter")) %>% 
+  mutate(labs = paste0("n = ", n)) %>% 
+  select(recruiter, salary, labs) %>% 
+  mutate(recruiter = ifelse(recruiter == 1, "Recruiter", "Employer")) %>% 
+  filter(!is.na(salary)) %>%  
+  ggplot(aes(x=labs, y=salary, fill=recruiter)) +
+    geom_violin(width=1.4) +
+    geom_boxplot(width = 0.2, color = "ivory", alpha = 0.2) +
+    scale_fill_manual(values = c('Recruiter' = high_colour("RdBu"), 'Employer' = low_colour("RdBu") ), guide = FALSE) +
+  scale_y_continuous(labels = scales::dollar, breaks = pretty_breaks(n = 10)) +
+    theme_precision +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11),
+      axis.title.x = element_blank()
+    ) +
+    ggtitle("Salary")
+
+
+#--- Salary Disclosure ---#
+stats <- listings %>%
+  mutate(salary_disclosed = ifelse(is.na(salary), 0, 1)) %>% 
+  group_by(recruiter) %>%
+  summarise(
+    ave_salary = mean(salary, na.rm = TRUE),
+    ave_company_rating = mean(companyRating, na.rm = TRUE),
+    ave_salary_disclosed = mean(salary_disclosed)
+    )
+
+sample_size_2 <- listings %>%
+  mutate(salary_disclosed = ifelse(is.na(salary), 0, 1)) %>% 
+  group_by(recruiter) %>% 
+  summarise(n=n())
+
+p2 <- stats %>% 
+  left_join(sample_size_2, by = c("recruiter")) %>% 
+  mutate(labs = paste0("n = ", n)) %>% 
+  mutate(recruiter = ifelse(recruiter == 1, "Recruiter", "Employer")) %>% 
+  ggplot() + 
+  geom_col(aes(x = labs, y = ave_salary_disclosed, fill = recruiter)) +
+  theme_precision +
+  scale_fill_manual(values = c('Recruiter'=high_colour("RdBu"), 'Employer'=low_colour("RdBu")), guide = FALSE) +
+  scale_y_continuous(labels = percent_format(accuracy = 1), breaks = pretty_breaks(n = 10)) +
+    theme_precision +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11),
+      axis.title.x = element_blank()
+    ) +
+    ggtitle("Salary Disclosure")
+
+
+#-- Length of Job Ad ---#
+
+sample_size_3 <- listings %>% 
+  select(recruiter) %>% 
+  group_by(recruiter) %>% 
+  summarise(n=n()) 
+
+p3 <- listings %>% 
+  left_join(sample_size_3, by = c("recruiter")) %>% 
+  mutate(labs = paste0("n=", n)) %>% 
+  mutate(job_desc_len = nchar(jobDescription)) %>% 
+  select(recruiter, job_desc_len, labs) %>% 
+  mutate(recruiter = ifelse(recruiter == 1, "Recruiter", "Employer")) %>% 
+  ggplot(aes(x=labs, y=job_desc_len, fill=recruiter)) +
+    geom_violin(width=1.4) +
+    geom_boxplot(width = 0.2, color = "ivory", alpha = 0.2) +
+    scale_fill_manual(values = c('Recruiter' = high_colour("RdBu"), 'Employer' = low_colour("RdBu")), guide = FALSE) +
+  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+    theme_precision +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11),
+      axis.title.x = element_blank()
+    ) +
+    ggtitle("Job Description Length")
+
+
+#-- Days to Fill Role ---#
+
+# Filter listings for which we cannot reliabily gauge listing duration
+start_of_research_period <- as.Date(min(listings$first_seen))
+end_of_research_period <- as.Date(max(listings$last_seen))
+
+sample_size_4 <- listings %>% 
+  filter(
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30
+    ) %>% 
+  group_by(recruiter) %>% 
+  summarise(n = n())
+  
+
+p4 <- listings %>% 
+  left_join(sample_size_4, by = c("recruiter")) %>% 
+  filter(
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30) %>% 
+  mutate(
+    days_to_fill = as.numeric(as.Date(last_seen)) - as.numeric(as.Date(first_seen))
+         ) %>% 
+  mutate(labs = paste0("n = ", n)) %>% 
+  select(labs, recruiter, days_to_fill) %>% 
+  mutate(recruiter = ifelse(recruiter == 1, "Recruiter", "Employer")) %>% 
+  ggplot(aes(x=labs, y=days_to_fill, fill=recruiter)) +
+    geom_violin(width=1.4) +
+    geom_boxplot(width=0.2, color="ivory", alpha=0.2) +
+    scale_fill_manual(values = c('Recruiter'=high_colour("RdBu"), 'Employer'=low_colour("RdBu") ), guide = FALSE) +
+  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+    theme_precision +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11),
+      axis.title.x = element_blank()
+    ) +
+    ggtitle("Days to Fill Role")
+
+# Arrange plots
+patch <- p1 + (p2 / p4) + p3
+
+patch + 
+  plot_annotation(
+    title = "Difference between <span style='color:#053061;'><strong>Recruiters</strong></span>
+    and
+    <span style='color:#67001F;'><strong>Employers</strong></span>",
+    theme = theme(plot.title = element_markdown(lineheight = 1.1))
+  ) 
+
+```
+
+
+Some observations:
+
+- The first quartile salary for recruiter job listings is not far off the *third* quartile for employer listings! It's very hard to know what this tells us. Is it that recruiters like to use salary as a selling point? Or is it simply that companies are more likely to use recruiters for higher paying roles? 
+
+- There is also a *very* significant difference in the way that recruiters disclose salary as opposed to employers - in fact, <strong>recruiters are more than twice as likely to disclose the salary in the job ad</strong>, perhaps that entices more candidates to apply or, conversely, perhaps it dissuades applicants with too high expectations early on so as to not waste time later.
+
+- Recruiters leave job ads up much more than employers do. This could be because they see more value in excess applications (since if one role is filled, they can always keep good applicants on hand for other roles). It could also be because they work to more structured schedules, and maximise the value from a 30 day ad by letting most of their ads run for that full duration.
+
+
+
+  
+
+
+# Job Titles {#jobs .tabset .tabset-fade .tabset-pills .pad}
+
+Which job titles are...
+
+##  Most Common
+
+```{r}
+
+listings %>% 
+  mutate(jobTitle = trimws(jobTitle)) %>% 
+  group_by(jobTitle) %>% 
+  summarise(n=n(), ave_salary = format_dollars(mean(salary, na.rm = TRUE))) %>% 
+  filter(ave_salary != "$NaN") %>% 
+  arrange(desc(n)) %>% 
+  as.data.frame %>% 
+  head(10) %>% 
+  kable %>% 
+  kable_styling(fixed_thead = T) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  scroll_box(height = "400px")
+```
+
+
+## Lowest Paid
+```{r}
+listings %>% 
+  mutate(jobTitle = trimws(jobTitle)) %>% 
+  group_by(jobTitle) %>% 
+  summarise(n=n(), ave_salary = mean(salary, na.rm = TRUE)) %>% 
+  filter(ave_salary != "$NaN") %>% 
+  arrange(ave_salary) %>% 
+  mutate(ave_salary = format_dollars(ave_salary)) %>% 
+  as.data.frame %>% 
+  head(10) %>% 
+  kable %>% 
+  kable_styling(fixed_thead = T) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  scroll_box(height = "400px")
+```
+
+
+## Highest Paid
+
+```{r}
+
+listings %>% 
+  mutate(jobTitle = trimws(jobTitle)) %>% 
+  group_by(jobTitle) %>% 
+  summarise(n=n(), ave_salary = mean(salary, na.rm = TRUE)) %>% 
+  filter(ave_salary != "$NaN") %>% 
+  arrange(desc(ave_salary)) %>% 
+  mutate(ave_salary = format_dollars(ave_salary)) %>% 
+  as.data.frame %>% 
+  head(10) %>% 
+  kable %>% 
+  kable_styling(fixed_thead = T) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  scroll_box(height = "400px")
+
+```
+
+
+## Most Satisfying
+
+Note the sample sizes are *very* small, so the results here are interesting but unreliable.
+
+```{r}
+
+listings %>% 
+  mutate(jobTitle = trimws(jobTitle)) %>% 
+  group_by(jobTitle) %>% 
+  summarise(n=n(), companyRating = mean(companyRating, na.rm = TRUE)) %>% 
+  filter(companyRating != "$NaN") %>% 
+  arrange(desc(companyRating)) %>% 
+  as.data.frame %>% 
+  head(10) %>% 
+  kable %>% 
+  kable_styling(fixed_thead = T) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  scroll_box(height = "400px")
+
+```
+
+
+## Least Satisfying
+
+Note the sample sizes are *very* small, so the results here are interesting but unreliable.
+
+```{r}
+
+listings %>% 
+  mutate(jobTitle = trimws(jobTitle)) %>% 
+  group_by(jobTitle) %>% 
+  summarise(n=n(), companyRating = mean(companyRating, na.rm = TRUE)) %>% 
+  filter(companyRating != "$NaN") %>% 
+  arrange(companyRating) %>% 
+  as.data.frame %>% 
+  head(10) %>% 
+  kable %>% 
+  kable_styling(fixed_thead = T) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>% 
+  scroll_box(height = "400px")
+
+```
+
+
+# {.unlisted .unnumbered}
+
+
+
+
+
+
+
+
+
+# Correlation Matrix {#correlations .pad}
+
+Let's explore the correlations between some key variables
+
+```{r}
+
+# These names simply make the final correlation matrix a little more readable
+cor_mat_names <- c("Is Right To Work Required", "Days to Fill Role", "Job Description Length", 
+                   "Company Rating", "Salary", "Python", "R", "SQL", "Hadoop") 
+
+# Filter listings for which we cannot reliabily gauge listing duration
+start_of_research_period <- as.Date(min(listings$first_seen))
+end_of_research_period <- as.Date(max(listings$last_seen))
+
+listings %>%   
+  filter(
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30) %>% 
+  mutate(
+    days_to_fill = as.numeric(as.Date(last_seen)) - as.numeric(as.Date(first_seen)),
+    isRightToWorkRequired = ifelse(isRightToWorkRequired == "t", 1, 0),
+    listingDate = as.Date(listingDate),
+    listing_expiry = as.numeric(expiryDate - listingDate),
+    jobDescriptionLength = nchar(jobDescription)
+  ) %>% 
+  select(isRightToWorkRequired, days_to_fill, jobDescriptionLength, companyRating, salary, Python, R, SQL, Hadoop) %>% 
+  cor(use = "complete.obs") %>% 
+  replace(is.na(.), 0) %>% 
+  as.data.frame %>% 
+  `colnames<-`(cor_mat_names) %>% 
+  `rownames<-`(cor_mat_names) %>%
+  as.matrix %>% 
+  corrplot(type = "upper", tl.col = "black", tl.srt = 45)
+
+```
+
+
+The correlation matrix provides some very interesting results - let's take a close look:
+
+ - R jobs are positively correlated with Company Rating, but are negative correlated with salary (python is neutral in both regards)
+ - Hadoop is strongly correlated with better salaries *and* not being required to have the right to work in Australia, perhaps indicating a shortage of hadoop expertise in the domestic labour market. 
+ - Salary and being required to have the right to work in Australia are strongly negatively correlated, indicating that jobs for which overseas applicants are being considered tend to pay more. 
+ - Python and R are both correlated with applicants being required to have the right to work in Australia
+ - Somewhat unsurpisingly, the days to fill the role and salary are strongly positively correlated (i.e. roles with higher salaries tend to be filled more quickly)
+ - Interestingly, the length of the job description is negatively correlated with salary. Could this be because employers offering better remuneration don't feel the need to write extensive descriptions, or conversely that lower paying employers are trying to entice applicants with more information about the role?
+ - Also interestingly, jobs with long job descriptions also took longer to fill.
+
+
+
+
+
+
+
+
+
+
+## Crossover Between Languages {.pad}
+
+Let's first compare the heavyweights: R, Python, and SQL
+
+
+```{r}
+
+venn_data <- listings %>% 
+  select(jobId, Python, SQL, R) %>% 
+  pivot_longer(cols = Python:R, "language") %>% 
+  filter(value == 1)
+
+plot <- venn.diagram(
+  x = list(
+    venn_data %>% filter(language=="Python") %>% pull(jobId) ,
+    venn_data %>% filter(language=="R") %>% pull(jobId),
+    venn_data %>% filter(language=="SQL") %>% pull(jobId)
+  ),
+  main = "",
+  category.names = c("Python" , "R", "SQL"),
+  filename = NULL,
+  output = TRUE ,
+  imagetype="png" ,
+  height = 300 , 
+  width = 270 , 
+  resolution = 300,
+  compression = "lzw",
+  lwd = 3,
+  col=c(get_colour("Python"), get_colour("R"), get_colour("SQL")),
+  fill = c(alpha(get_colour("Python"),0.3), alpha(get_colour("R"),0.3), alpha(get_colour("SQL"),0.3)),
+  cex = 1.0, # Numbers 
+  fontfamily = "sans",
+  cat.cex = 1.2, # Labels
+  cat.default.pos = "outer",
+  cat.pos = c(-27, 27, 135),
+  cat.dist = c(0.055, 0.055, 0.085),
+  cat.fontfamily = "sans",
+  cat.col = c(get_colour("Python"), get_colour("R"), get_colour("SQL")),
+  rotation = 1
+) 
+grid.newpage()
+grid::grid.draw(plot)
+
+```
+
+
+<br>
+We see a *huge* overlap between these three languages. Only a paltry 68 SQL jobs (just 8% of all SQL jobs) *don't* also mention Python or R as well. Let's see what the crossovers are like for *all* languages - we can visualise and explore these using co occurrence matrices. 
+
+
+## Co-occurrence {.tabset .tabset-fade .tabset-pills .pad}
+
+
+### Relative
+
+The relative co occurrence matrix answers the question: ***for the language on the left side, what percentage of listings also mentioned the language along the bottom of the chart?***. For example, of the jobs that require Java skills, 91.7% of them also require Python skills.
+
+
+```{r}
+
+cooccurrence_matrix <- listings %>% 
+  select(jobId, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "language") %>% 
+  filter(value == 1) %>% 
+  select(jobId, language) %>% 
+  table %>% crossprod 
+  
+totals_df <- listings %>% 
+  select(jobId, R:Fortran) %>% 
+  pivot_longer(R:Fortran, names_to = "language") %>% 
+  filter(value == 1) %>% 
+  group_by(language) %>% 
+  summarise(n=n())
+  
+totals <- totals_df$n
+names(totals) <- totals_df$language
+
+relative_cooccurrence_matrix <- (cooccurrence_matrix / totals) %>% `*`(100) %>% round(1)
+
+# The diagonal gives us no extra information, and is distracting, so lessen its visual impact:
+diag(relative_cooccurrence_matrix) <- 0
+
+smart_colours <- c("white", rev(viridis(n = 256, alpha = 1, begin = 0, end = 1, option = "plasma")))
+
+p <- heatmaply(relative_cooccurrence_matrix, 
+               dendrogram = "none",
+               xlab = "", ylab = "", 
+               main = "Co-occurrence - Relative (%)",
+               # scale = "column",
+               margins = c(60,100,40,20),
+               grid_color = "grey",
+               grid_width = 0.00001,
+               titleX = FALSE,
+               hide_colorbar = FALSE,
+               branches_lwd = 0.1,
+               # label_names = c("Country", "Feature:", "Value"),
+               fontsize_row = 5, fontsize_col = 5,
+               labCol = colnames(relative_cooccurrence_matrix),
+               labRow = rownames(relative_cooccurrence_matrix),
+               heatmap_layers = theme(axis.line=element_blank()),
+               #colors = rev(viridis(n = 256, alpha = 1, begin = 0, end = 1, option = "viridis"))
+               #colors = rev(c("000000", heat.colors(300)))
+               colors = smart_colours)
+
+p
+
+```
+
+### Absolute
+
+The absolute co-occurrence matrix tells us: **for a language on the right hand side, how many of its job listings *also* mentioned each language across the bottom axis?**. For example, 100 python job listings also mentioned matlab. 
+
+```{r}
+
+# Co-Occurrence (stronger to weaker)
+
+cooccurrence_matrix <- listings %>% 
+  select(jobId, R:Fortran) %>% 
+  pivot_longer(R:Fortran) %>% 
+  filter(value == 1) %>% 
+  select(jobId, name) %>% 
+  table %>% crossprod 
+  
+smart_colours <- c("white", rev(viridis(n = 256, alpha = 1, begin = 0, end = 1, option = "plasma")))
+
+p <- heatmaply(cooccurrence_matrix, 
+               dendrogram = "none",
+               xlab = "", ylab = "", 
+               main = "Co-occurrence - Absolute",
+               # scale = "column",
+               margins = c(60,100,40,20),
+               grid_color = "grey",
+               grid_width = 0.00001,
+               titleX = FALSE,
+               hide_colorbar = FALSE,
+               branches_lwd = 0.1,
+               # label_names = c("Country", "Feature:", "Value"),
+               fontsize_row = 5, fontsize_col = 5,
+               labCol = colnames(cooccurrence_matrix),
+               labRow = rownames(cooccurrence_matrix),
+               heatmap_layers = theme(axis.line=element_blank()),
+               #colors = rev(viridis(n = 256, alpha = 1, begin = 0, end = 1, option = "viridis"))
+               #colors = rev(c("000000", heat.colors(300)))
+               colors = smart_colours)
+
+p
+
+```
+
+## {.unlisted .unnumbered}
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Head to Head: R Vs Python {#rvpy .pad}
+
+
+When comparing salaries, we can see the distributions are *very* similar - python has more jobs in the mid range, and a scattering more jobs available the mid-high salary range. 
+```{r}
+
+listings %>%
+  select(salary, R, Python) %>% 
+  pivot_longer(R:Python, names_to = "Language") %>% 
+  filter(value == 1) %>% 
+  select(-value) %>% 
+  group_by(Language) %>% 
+  ungroup %>% 
+  ggplot(aes(salary, fill = Language)) +
+  geom_histogram(breaks = seq(0, 400000, 12500), position = "identity", alpha = 0.4) + 
+  labs(title = '') + 
+  scale_x_continuous(labels = scales::dollar, breaks = pretty_breaks(n = 10), limits = c(0, NA), expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_precision + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "none") + 
+  labs(title="Salary Comparison -
+  <span style='color:#00BFC4';><strong>R</strong></span> Vs
+  <span style='color:#F8766D';><strong>Python</strong></span>") +
+  theme(plot.title = element_markdown(lineheight = 1.1),
+        plot.subtitle = element_markdown(lineheight = 1.1)) + 
+  
+  # Python note
+  geom_text(aes(x=75000, y=50,label="Many more python jobs"), colour="grey30", angle=0, size = 3.25) +
+  geom_curve(
+  aes(x = 70000, y = 46.5, xend = 95000, yend = 40),
+  arrow = arrow(length = unit(0.03, "npc"), type="closed"), colour = "#EC7014", size = 0.8, angle = 70) +
+  
+  # Second arrow
+  geom_curve(
+  aes(x = 80000, y = 54, xend = 115000, yend = 58),
+  arrow = arrow(length = unit(0.03, "npc"), type="closed"), colour = "#EC7014", size = 0.8, angle = 90, 
+  curvature = -0.3)
+
+```
+
+
+```{r}
+
+listings %>%
+  select(companyRating, R, Python) %>%
+  pivot_longer(R:Python, names_to = "Language") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
+  group_by(Language) %>%
+  ungroup %>% 
+  ggplot(aes(companyRating, fill = Language)) +
+  expand_limits(x = 0, y = 0) +
+  geom_histogram(bins = 30, position = "identity", alpha = 0.6) + 
+  
+  # geom_mark_rect(
+  #   data = data.frame(x = c(0.2, 2.4, 2.4, 0.2),
+  #                     y = c(0.2, 0.2, 2.4, 2.4)), 
+  #   fill = "red", inherit.aes = FALSE, aes(x=x, y=y, linetype = "none"),
+  #   alpha= 0.06) +
+  
+  scale_x_continuous(limits = c(0, 5), expand = c(0, 0), breaks = pretty_breaks(n = 10)) +
+  scale_y_continuous(limits = c(0, 50)) +
+  theme_precision + 
+  theme(axis.text.x = element_text(), 
+        axis.title.y = element_blank(), 
+        axis.title.x = element_blank(),
+        legend.position = "none") + 
+  labs(title="Company Rating Comparison -
+  <span style='color:#00BFC4';><strong>R</strong></span> Vs
+  <span style='color:#F8766D';><strong>Python</strong></span>") +
+  theme(plot.title = element_markdown(lineheight = 1.1),
+        plot.subtitle = element_markdown(lineheight = 1.1)) 
+  
+```
+
+
+Overall, the ranges covered by R and Python jobs are very similar (2.5+), although Python has more jobs with lower (2.5 - 3) and mid range company ratings. 
+
+
+  
+
+
+
+# Do Standout Ads Work? {#standout .tabset .tabset-fade .tabset-pills .pad}
+
+Here we try to understand whether standout ads actually work. [Standout ads](https://talent.seek.com.au/support/productterms/) are available at an additional cost, and entitle the advertiser to:
+
+<br><br>
+
+> - up to three bullet points - “selling points”;
+> - logo at the right-hand side of the ad
+> - a border around the ad summary 
+
+<br><br>
+
+
+Unfortunately, we have no metrics on how many applicants a job ad received, nor as to the quality of applicants. But there still may be a way to vaguely measure the success of a job ad, and that could be to assume that if it's taken down sooner, then the poster achieved their intent (i.e. had received enough applications). So we can ask the question - *do standout ads tend to get taken down sooner?*
+
+<br>
+
+## Listing Duration
+
+
+```{r}
+
+start_of_research_period <- as.Date(min(listings$first_seen))
+end_of_research_period <- as.Date(max(listings$last_seen))
+
+listings %>% 
+  filter(
+    
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30) %>% 
+  mutate(
+    days_to_fill = as.numeric(as.Date(last_seen)) - as.numeric(as.Date(first_seen))
+         ) %>% 
+  pull(days_to_fill) %>% 
+  table %>% 
+  as.data.frame %>% 
+  mutate(
+    cumulative_percent = { cumsum(Freq) / sum(Freq) } %>% `*`(100) %>% round(1)
+    ) %>% 
+  `colnames<-`(c("Days", "Frequency", "Cumulative (%)")) %>% 
+  mutate(Days = Days %>% as.character %>% as.numeric) %>% 
+  mutate(to_colour = ifelse(Days == 30, 'yes', 'no')) %>% 
+  ggplot(aes(x=Days, y = Frequency, fill = to_colour)) + 
+  geom_col() +
+  theme_precision +
+  scale_x_continuous(breaks = seq(0, 60, 2)) +
+  scale_fill_manual(values = c('yes'="tomato", 'no'="gray" ), guide = FALSE) +
+  ggtitle("How Long Do Listings Remain Online?")
+
+```
+
+
+## Cumulative Percent
+
+
+```{r} 
+
+start_of_research_period <- as.Date(min(listings$first_seen))
+end_of_research_period <- as.Date(max(listings$last_seen))
+
+listings %>% 
+  filter(
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30) %>% 
+  mutate(
+    days_to_fill = as.numeric(as.Date(last_seen)) - as.numeric(as.Date(first_seen))
+         ) %>% 
+  pull(days_to_fill) %>% 
+  table %>% 
+  as.data.frame %>% 
+  mutate(
+    cumulative_percent = { cumsum(Freq) / sum(Freq) } %>% `*`(100) %>% round(1)
+    ) %>% 
+  `colnames<-`(c("Days", "Frequency", "Cumulative (%)")) %>%
+  kable(escape = F) %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = T) %>%
+  column_spec(c(1,3), bold = T) %>%
+  row_spec(30, bold = T, color = "white", background = "#EC7014") %>%
+  row_spec(31, bold = T, color = "white", background = "blue") 
+
+```
+
+# {.unlisted .unnumbered}
+
+Seek.com.au job ads expire after 30 days, unless pulled early or extended. It's very interesting in itself that 60% of job ads are pulled before their natural expiry (29 days or less). This may be an indicator that the jobs ads have worked, the poster got what they needed and removed the ad early.  
+
+
+
+Back to standout ads. First, we need to figure out which job listings were standout ads vs those which were not. Luckily the listing URL contains some info that may help us. Let's take a look at some URLs, paying careful attention to the last part of each URL:
+
+
+```{r}
+
+listings %>% 
+  pull(seekJobListingUrl) %>% 
+  head(10)
+
+```
+
+At the ends of the job listing URLs, we see a paramter telling us whether the listing was 'standard' or 'standout'. Conveniently, the words 'standard' and 'standout' both have 8 letters, so let's see what happens when we grab the last 8 characters of the URLs. If our theory is correct, we'll have only two unique results
+
+```{r}
+
+listings$seekJobListingUrl %>% 
+  str_sub(., -8, -1) %>% 
+  unique()
+
+```
+
+The first two results are what we expected, but we weren't expecting all the others. Let's ask for all the urls which *don't* end with either 'standard' or 'standout', and see what they look like:
+
+
+```{r}
+
+listings %>% 
+  filter(!str_sub(seekJobListingUrl, -8, -1) %in% c("standard", "standout")) %>% 
+  pull(seekJobListingUrl) %>% 
+  head(5)
+
+```
+
+It looks like there are additional parameters in some URLs. We can use the `urltools` library to parse the URLs and retrieve the 'type' parameter that we are after. Oddly, these errant URLs appear to have parameters *after* the hash in the URL, which is a little different to most, however, [query strings are non-standard and implementation is client-specific](https://en.wikipedia.org/wiki/Query_string#URL_encoding)
+
+Here are the unique results:
+
+```{r}
+
+listings %>% 
+  pull(seekJobListingUrl) %>% 
+  parameters() %>% 
+  str_sub(-8, -1) %>% 
+  table
+
+```
+<br><br>
+
+Now that we know which ads are 'standard' and which are 'standout', we can plot their `days_to_fill` values:
+
+<br><br>
+
+```{r}
+
+start_of_research_period <- as.Date(min(listings$first_seen))
+end_of_research_period <- as.Date(max(listings$last_seen))
+
+sample_size <- listings %>% 
+  filter(
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30) %>% 
+  mutate(
+    days_to_fill = as.numeric(as.Date(last_seen)) - as.numeric(as.Date(first_seen))
+         ) %>% 
+  mutate(standout = seekJobListingUrl %>% parameters %>% str_sub(-8, -1)) %>% 
+  group_by(standout) %>% 
+  summarise(n=n())
+  
+listings %>% 
+  filter(
+    # Exclude listings that were posted prior to the first day of the research period 
+    listingDate > start_of_research_period, 
+    listingDate < end_of_research_period - 30) %>% 
+  mutate(
+    days_to_fill = as.numeric(as.Date(last_seen)) - as.numeric(as.Date(first_seen))
+         ) %>% 
+  mutate(standout = seekJobListingUrl %>% parameters %>% str_sub(-8, -1)) %>%  
+  left_join(sample_size, by = c("standout")) %>%
+  mutate(labs = paste0("n = ", n)) %>%  
+  ggplot(aes(x = labs, y = days_to_fill, fill = standout)) +
+  geom_violin() +
+    geom_boxplot(width = 0.2, color = "ivory", alpha = 0.2) +
+    scale_fill_manual(values = c('standout'="#E7298A", 'standard'="#807DBA"), guide = FALSE) +
+  scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+    theme_precision +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11),
+      axis.title.x = element_blank()
+    ) +
+    labs(title = "<span style='color:#E7298A;'><strong>Standout</strong></span> Vs
+         <span style='color:#807DBA;'><strong>Standard</strong></span> Job Advertisements") +
+  theme(plot.title = element_markdown(lineheight = 1.1)) 
+
+```
+
+
+Standard job ads tend to stay up for 30 days (note the wider bulge at the 30 day mark), but standout ads are often removed much earlier (evident from the wide stem), potentially due to them having already produced the desired results. We can't be totally sure about this, as the reason for getting a standout ad in the first place may have been *because* the job needed to be filled quickly. 
+
+
+
+
+
+
+
+<br><br><br>
+<hr>
+
+
+That concludes this EDA. I hope you enjoyed exploring it as much as I did making it. 
+<br><br><br>
+
+
+## (really) Useful Resources
+
+* [The Glamour of Graphics - William Chase](https://resources.rstudio.com/rstudio-conf-2020/the-glamour-of-graphics-william-chase)
+* [How to use bootstrap styling in an RMarkdown doc](https://holtzy.github.io/Pimp-my-rmd/)
+* [The Data Imaginist](https://www.data-imaginist.com/2019/the-ggforce-awakens-again/) as well as these two great resources on [ggplot2](https://www.youtube.com/watch?v=h29g21z0a68) (and [beyond](https://www.youtube.com/watch?v=0m4yywqNPVY)) 
+* [Ultimate guide to webscraping](https://www.youtube.com/watch?v=1UYBAn69Qrk) - not in R, but a lot of fun all the same
+* [Programming language logos](https://github.com/gilbarbara/logos)
+* [Programming language colours](https://github.com/ozh/github-colors)
+
+
+
+
+# For Fun {#fun .pad}
+
+Here's the code for the banner used at the top of the page. Can you name all 25 logos? 
+<br><br><br>
+<center><img src="`r language_banner_url`" height=60% width=60%></center>
+<br><br><br>
+```
+#####################
+### Collect logos ###
+#####################
+
+# library(tidyverse); library(RCurl); library(png); 
+
+c("R", "Python", "Matlab", "SQL", "Stata", "Minitab", "SPSS", 
+"Ruby", "C", "Scala", "Tableau", "Java", "Hadoop", "SAS", "Julia", 
+"Knime", "D3", "Clojure", "Haskell", "Lisp", "Golang", "Spark", 
+"Javascript", "F#", "Fortran") -> languages
+
+logos <- list()
+
+for(i in 1:length(languages)) {
+  
+logos[[languages[i]]] <- languages[i] %>% 
+  curlEscape %>% 
+  paste0("https://raw.githubusercontent.com/stevecondylios/data-science-logos/master/logos/", ., ".png") %>% 
+  getURLContent %>% 
+  readPNG
+  
+}
+
+
+#######################
+### Generate Banner ###
+#######################
+
+set.seed(123)
+while (!is.null(dev.list()))  dev.off()
+par(mai=rep(0,4)) # Ensure no margins
+
+layout(matrix(1:294, ncol=(7 * 6), byrow=TRUE))
+
+for(i in 1:294) {
+  plot(NA,
+       xlim = 0:1,
+       ylim = 0:1,
+       bty = "n",
+       axes = 0
+       )
+
+  rasterImage(logos[[sample(1:length(languages), 1, T)]],0,0,1,1)
+}
+
+# Export 1483 x 700
+# while (!is.null(dev.list()))  dev.off()
+
+
+```
+
+
+
+
+<br><br><br><br><br><br><br><br><br><br><br><br>
+
+
+
+
+
+
